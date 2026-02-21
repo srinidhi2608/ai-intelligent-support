@@ -58,8 +58,19 @@ ai-intelligent-support/
 git clone https://github.com/srinidhi2608/ai-intelligent-support.git
 cd ai-intelligent-support
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
 ```
+
+**Activate the virtual environment — choose the command for your OS / shell:**
+
+| Platform | Shell | Command |
+|----------|-------|---------|
+| macOS / Linux | bash / zsh | `source .venv/bin/activate` |
+| Windows | PowerShell | `.venv\Scripts\Activate.ps1` |
+| Windows | Command Prompt (cmd) | `.venv\Scripts\activate.bat` |
+
+> **Windows PowerShell tip:** If you see an error like *"running scripts is disabled on this system"*, run
+> `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+> once in PowerShell and then retry.
 
 ### 2. Install dependencies
 
@@ -69,10 +80,22 @@ pip install -r requirements.txt
 
 ### 3. Configure environment variables
 
+**macOS / Linux:**
 ```bash
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
 ```
+
+**Windows PowerShell:**
+```powershell
+Copy-Item .env.example .env
+```
+
+**Windows Command Prompt:**
+```cmd
+copy .env.example .env
+```
+
+Open `.env` in any text editor and add your `OPENAI_API_KEY`.
 
 ### 4. Run the API server
 
