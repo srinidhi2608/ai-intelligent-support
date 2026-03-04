@@ -35,5 +35,8 @@ htmlcov/
 # macOS
 .DS_Store
 
+# Generated telemetry CSV files (recreate with: python data/telemetry_generator.py)
+data/output/*.csv
+
 # Jupyter
 .ipynb_checkpoints/
