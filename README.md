@@ -130,8 +130,15 @@ pytest tests/ -v
 ## Generate Synthetic Data
 
 ```bash
+# Full multimodal telemetry dataset (merchants + transactions + webhook logs)
+python data/telemetry_generator.py
+# Output: data/output/merchants.csv, transactions.csv, webhook_logs.csv
+
+# Quick 5-row preview (unit-testing helper)
 python data/mock_generator.py
 ```
+
+See **[`data/DATA_DESCRIPTION.md`](data/DATA_DESCRIPTION.md)** for a complete, presentation-ready description of the generated datasets, their schemas, scale statistics, and all six injected anomalies.
 
 ---
 
