@@ -121,9 +121,25 @@ The interactive API docs will be available at **http://localhost:8000/docs**.
 
 ## Running Tests
 
+> **Important:** always run pytest from the **project root directory**
+> (`ai-intelligent-support/`), not from inside the `tests/` folder.
+> The `pytest.ini` at the root adds the project root to `sys.path` so that
+> the `models`, `data`, `api`, and `agents` packages are importable.
+
 ```bash
+# From the project root — run the entire test suite
 pytest tests/ -v
+
+# Run a single test file
+pytest tests/test_ml_watcher.py -v
+
+# Run a specific test class or function
+pytest tests/test_ml_watcher.py::TestEngineerFeatures -v
+pytest tests/test_ml_watcher.py::TestEngineerFeatures::test_output_columns -v
 ```
+
+If you still see `ModuleNotFoundError: No module named 'models'`, make sure
+you are in the project root and your virtual environment is activated.
 
 ---
 
