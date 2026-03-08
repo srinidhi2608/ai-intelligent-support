@@ -38,5 +38,9 @@ htmlcov/
 # Generated telemetry CSV files (recreate with: python data/telemetry_generator.py)
 data/output/*.csv
 
+# RAG pipeline generated artifacts (recreate with: python rag_setup.py)
+docs/
+chroma_db/
+
 # Jupyter
 .ipynb_checkpoints/
