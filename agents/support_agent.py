@@ -50,7 +50,7 @@ class SupportAgent:
 
     def __init__(self, model_name: str | None = None) -> None:
         """
-        Initialise the LLM and bind the available tools to it.
+        Initialise the LLM for reasoning-based support.
 
         Args:
             model_name: Ollama model to use.  Falls back to the ``LLM_MODEL``
@@ -59,17 +59,16 @@ class SupportAgent:
         self.model_name = model_name or os.getenv("LLM_MODEL", "deepseek-r1")
 
         # Instantiate the LLM (local Ollama – no API key required)
+        # Uses a reasoning-only model (deepseek-r1 by default).
+        # Tool calling is NOT used here; the LLM reasons directly.
         self.llm = ChatOllama(
             model=self.model_name,
             temperature=0,  # deterministic for support use-cases
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         )
 
-        # Register all tools the agent is allowed to call
+        # Available tools (for reference / future ReAct loop implementation)
         self._tools = [fetch_transaction_status, get_merchant_profile]
-
-        # Bind tools to the LLM so it can emit function-call messages
-        self.llm_with_tools = self.llm.bind_tools(self._tools)
 
     # ──────────────────────────────────────────────────────────────────────
     # Public interface
@@ -98,8 +97,9 @@ class SupportAgent:
             HumanMessage(content=user_message),
         ]
 
-        # Initial LLM call – may contain tool-call instructions
-        response = self.llm_with_tools.invoke(messages)
+        # Reasoning-only LLM call (no tool binding – deepseek-r1 does
+        # not support native tool calling).
+        response = self.llm.invoke(messages)
 
         # For now, return the content directly.
         # A full agentic loop would handle tool_calls here.

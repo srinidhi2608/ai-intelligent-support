@@ -7,6 +7,8 @@ about transaction declines, webhook errors, and payout schedules, and receive
 autonomous, tool-backed answers from the AI agent.
 
 The LLM backend is **Ollama** (local), so no cloud API key is required.
+A **tool-capable** model (e.g. ``llama3.1``) is used because the ReAct agent
+relies on native tool-calling support.
 
 Usage::
 
@@ -14,7 +16,7 @@ Usage::
 
 Environment variables
 ---------------------
-* ``LLM_MODEL``       – Override the model name (default: ``deepseek-r1``).
+* ``TOOL_LLM_MODEL``  – Tool-capable model name (default: ``llama3.1``).
 * ``OLLAMA_BASE_URL`` – Ollama server URL (default: ``http://localhost:11434``).
 """
 
@@ -50,13 +52,16 @@ def get_agent():
     """
     Initialise and return a LangGraph ReAct agent executor.
 
-    The agent is backed by ``ChatOllama`` (model configurable via the
-    ``LLM_MODEL`` env-var) and bound to the three merchant-support tools.
+    The agent is backed by ``ChatOllama`` using a **tool-capable** model
+    (configurable via the ``TOOL_LLM_MODEL`` env-var, default ``llama3.1``)
+    and bound to the three merchant-support tools.
 
     Returns:
         The compiled LangGraph agent executor (a ``CompiledGraph``).
     """
-    model_name = os.environ.get("LLM_MODEL", "deepseek-r1")
+    # Must be a tool-capable model (e.g. llama3.1, qwen2.5, mistral).
+    # deepseek-r1 does NOT support tool calling.
+    model_name = os.environ.get("TOOL_LLM_MODEL", "llama3.1")
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     llm = ChatOllama(
         model=model_name,

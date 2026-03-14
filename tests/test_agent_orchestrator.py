@@ -70,25 +70,25 @@ class TestInitializeAgent:
 
     @patch("agents.agent_orchestrator.create_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_uses_default_model(self, mock_llm_cls, mock_create):
-        """Default model should be deepseek-r1 when LLM_MODEL is not set."""
+    def test_uses_default_tool_model(self, mock_llm_cls, mock_create):
+        """Default model should be llama3.1 when TOOL_LLM_MODEL is not set."""
         with patch.dict("os.environ", {}, clear=True):
             initialize_agent()
         _, kwargs = mock_llm_cls.call_args
-        assert kwargs["model"] == "deepseek-r1"
+        assert kwargs["model"] == "llama3.1"
 
     @patch("agents.agent_orchestrator.create_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_respects_llm_model_env(self, mock_llm_cls, mock_create):
-        """LLM_MODEL env-var should override the default model name."""
+    def test_respects_tool_llm_model_env(self, mock_llm_cls, mock_create):
+        """TOOL_LLM_MODEL env-var should override the default model name."""
         with patch.dict(
             "os.environ",
-            {"LLM_MODEL": "llama3"},
+            {"TOOL_LLM_MODEL": "qwen2.5"},
             clear=True,
         ):
             initialize_agent()
         _, kwargs = mock_llm_cls.call_args
-        assert kwargs["model"] == "llama3"
+        assert kwargs["model"] == "qwen2.5"
 
     @patch("agents.agent_orchestrator.create_agent")
     @patch("agents.agent_orchestrator.ChatOllama")

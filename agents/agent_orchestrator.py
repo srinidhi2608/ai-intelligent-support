@@ -8,6 +8,9 @@ three production tools defined in ``agents.agent_tools`` and orchestrated by a
 detailed system prompt that enforces strict tool-usage policies.
 
 The LLM backend is **Ollama** (local), so no cloud API key is required.
+A **tool-capable** model (e.g. ``llama3.1``) is used here because the ReAct
+agent relies on native tool-calling support.  Reasoning-only models such as
+``deepseek-r1`` do **not** support tool calling and must not be used here.
 
 Usage (interactive console)::
 
@@ -18,7 +21,7 @@ and printing the agent's final response to stdout.  Type ``exit`` to quit.
 
 Environment variables
 ---------------------
-* ``LLM_MODEL``       – Override the model name (default: ``deepseek-r1``).
+* ``TOOL_LLM_MODEL``  – Tool-capable model name (default: ``llama3.1``).
 * ``OLLAMA_BASE_URL`` – Ollama server URL (default: ``http://localhost:11434``).
 """
 
@@ -70,8 +73,10 @@ def initialize_agent():
     The function:
 
     1. Instantiates a ``ChatOllama`` LLM backed by a local Ollama server
-       (model configurable via the ``LLM_MODEL`` env-var, defaulting to
-       ``deepseek-r1``).
+       using a **tool-capable** model (configurable via the
+       ``TOOL_LLM_MODEL`` env-var, defaulting to ``llama3.1``).
+       Reasoning-only models like ``deepseek-r1`` do **not** support
+       tool calling and will raise a 400 error if used here.
     2. Binds the three merchant-support tools to it.
     3. Wraps everything in ``create_agent`` (from ``langchain.agents``)
        with the system prompt via the ``system_prompt`` parameter.
@@ -80,7 +85,9 @@ def initialize_agent():
         The compiled LangGraph agent executor (a ``CompiledGraph``).
     """
     # ── Initialise the LLM (local Ollama – no API key required) ──────────
-    model_name = os.environ.get("LLM_MODEL", "deepseek-r1")
+    # Must be a tool-capable model (e.g. llama3.1, qwen2.5, mistral).
+    # deepseek-r1 does NOT support tool calling.
+    model_name = os.environ.get("TOOL_LLM_MODEL", "llama3.1")
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     llm = ChatOllama(
         model=model_name,

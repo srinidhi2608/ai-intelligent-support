@@ -69,8 +69,8 @@ class TestGetAgent:
 
     @patch("app.create_agent")
     @patch("app.ChatOllama")
-    def test_uses_default_model(self, mock_llm_cls, mock_create):
-        """Default model should be deepseek-r1 when LLM_MODEL is not set."""
+    def test_uses_default_tool_model(self, mock_llm_cls, mock_create):
+        """Default model should be llama3.1 when TOOL_LLM_MODEL is not set."""
         mock_create.return_value = MagicMock(name="compiled_agent")
         with patch.dict("os.environ", {}, clear=True):
             from app import get_agent
@@ -78,16 +78,16 @@ class TestGetAgent:
             get_agent.clear()
             get_agent()
         _, kwargs = mock_llm_cls.call_args
-        assert kwargs["model"] == "deepseek-r1"
+        assert kwargs["model"] == "llama3.1"
 
     @patch("app.create_agent")
     @patch("app.ChatOllama")
-    def test_respects_llm_model_env(self, mock_llm_cls, mock_create):
-        """LLM_MODEL env-var should override the default model name."""
+    def test_respects_tool_llm_model_env(self, mock_llm_cls, mock_create):
+        """TOOL_LLM_MODEL env-var should override the default model name."""
         mock_create.return_value = MagicMock(name="compiled_agent")
         with patch.dict(
             "os.environ",
-            {"LLM_MODEL": "llama3"},
+            {"TOOL_LLM_MODEL": "qwen2.5"},
             clear=True,
         ):
             from app import get_agent
@@ -95,7 +95,7 @@ class TestGetAgent:
             get_agent.clear()
             get_agent()
         _, kwargs = mock_llm_cls.call_args
-        assert kwargs["model"] == "llama3"
+        assert kwargs["model"] == "qwen2.5"
 
     @patch("app.create_agent")
     @patch("app.ChatOllama")
