@@ -39,6 +39,7 @@ faker>=24.0.0
 # ──────────────────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.1
 requests>=2.32.0          # HTTP calls from agentic tools to the FastAPI gateway
+streamlit>=1.33.0         # Chat UI for the Streamlit app (Phase 6)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Testing
