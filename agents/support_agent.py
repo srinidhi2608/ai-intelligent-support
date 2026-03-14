@@ -11,7 +11,7 @@ tool to gather context before formulating a response.
 import os
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
 from agents.tools import fetch_transaction_status, get_merchant_profile
 
@@ -53,16 +53,16 @@ class SupportAgent:
         Initialise the LLM and bind the available tools to it.
 
         Args:
-            model_name: OpenAI model to use.  Falls back to the ``LLM_MODEL``
-                        environment variable, then to ``gpt-4o``.
+            model_name: Ollama model to use.  Falls back to the ``LLM_MODEL``
+                        environment variable, then to ``deepseek-r1``.
         """
-        self.model_name = model_name or os.getenv("LLM_MODEL", "gpt-4o")
+        self.model_name = model_name or os.getenv("LLM_MODEL", "deepseek-r1")
 
-        # Instantiate the LLM
-        # TODO: swap for ChatGoogleGenerativeAI if using Gemini
-        self.llm = ChatOpenAI(
+        # Instantiate the LLM (local Ollama – no API key required)
+        self.llm = ChatOllama(
             model=self.model_name,
             temperature=0,  # deterministic for support use-cases
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         )
 
         # Register all tools the agent is allowed to call

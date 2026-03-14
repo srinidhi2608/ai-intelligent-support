@@ -7,8 +7,7 @@ Strategy
   without any API keys.
 * We test:
   - ``get_agent()`` happy path (returns a compiled agent).
-  - ``get_agent()`` error path (missing API key raises ``ValueError``).
-  - The ``create_react_agent`` is called with ``prompt=`` (not ``state_modifier=``).
+  - The ``create_agent`` is called with ``prompt=`` (not ``state_modifier=``).
   - Module-level imports and constants are accessible.
 """
 
@@ -27,102 +26,86 @@ import pytest
 class TestGetAgent:
     """Test the ``get_agent`` factory function."""
 
-    def test_raises_without_api_key(self):
-        """Must raise ValueError when OPENAI_API_KEY is absent."""
-        with patch.dict("os.environ", {}, clear=True):
-            # Import inside the test so env is patched before module runs
-            from app import get_agent
-
-            # Clear any cached result from a previous test run
-            get_agent.clear()
-
-            with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-                get_agent()
-
-    @patch("app.create_react_agent")
-    @patch("app.ChatOpenAI")
+    @patch("app.create_agent")
+    @patch("app.ChatOllama")
     def test_returns_agent_executor(self, mock_llm_cls, mock_create):
-        """With a valid key, the function should return the compiled agent."""
+        """With defaults, the function should return the compiled agent."""
         mock_create.return_value = MagicMock(name="compiled_agent")
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            from app import get_agent
+        from app import get_agent
 
-            get_agent.clear()
-            agent = get_agent()
+        get_agent.clear()
+        agent = get_agent()
         assert agent is mock_create.return_value
 
-    @patch("app.create_react_agent")
-    @patch("app.ChatOpenAI")
-    def test_uses_prompt_not_state_modifier(self, mock_llm_cls, mock_create):
-        """create_react_agent must be called with ``prompt=``, not ``state_modifier=``."""
+    @patch("app.create_agent")
+    @patch("app.ChatOllama")
+    def test_uses_system_prompt_not_state_modifier(self, mock_llm_cls, mock_create):
+        """create_agent must be called with ``system_prompt=``, not ``state_modifier=``."""
         mock_create.return_value = MagicMock(name="compiled_agent")
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            from app import get_agent
+        from app import get_agent
 
-            get_agent.clear()
-            get_agent()
+        get_agent.clear()
+        get_agent()
 
         _, kwargs = mock_create.call_args
-        assert "prompt" in kwargs, "Expected 'prompt' keyword argument"
+        assert "system_prompt" in kwargs, "Expected 'system_prompt' keyword argument"
         assert "state_modifier" not in kwargs, (
-            "'state_modifier' is deprecated; use 'prompt' instead"
+            "'state_modifier' is deprecated; use 'system_prompt' instead"
         )
 
-    @patch("app.create_react_agent")
-    @patch("app.ChatOpenAI")
+    @patch("app.create_agent")
+    @patch("app.ChatOllama")
     def test_passes_merchant_support_tools(self, mock_llm_cls, mock_create):
-        """All three merchant_support_tools must be passed to create_react_agent."""
+        """All three merchant_support_tools must be passed to create_agent."""
         mock_create.return_value = MagicMock(name="compiled_agent")
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            from app import get_agent
+        from app import get_agent
 
-            get_agent.clear()
-            get_agent()
+        get_agent.clear()
+        get_agent()
 
         _, kwargs = mock_create.call_args
         assert "tools" in kwargs
         assert len(kwargs["tools"]) == 3
 
-    @patch("app.create_react_agent")
-    @patch("app.ChatOpenAI")
+    @patch("app.create_agent")
+    @patch("app.ChatOllama")
     def test_uses_default_model(self, mock_llm_cls, mock_create):
-        """Default model should be gpt-4o-mini when LLM_MODEL is not set."""
+        """Default model should be deepseek-r1 when LLM_MODEL is not set."""
         mock_create.return_value = MagicMock(name="compiled_agent")
-        with patch.dict(
-            "os.environ", {"OPENAI_API_KEY": "sk-test-key"}, clear=True
-        ):
+        with patch.dict("os.environ", {}, clear=True):
             from app import get_agent
 
             get_agent.clear()
             get_agent()
-        mock_llm_cls.assert_called_once_with(model="gpt-4o-mini", temperature=0)
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["model"] == "deepseek-r1"
 
-    @patch("app.create_react_agent")
-    @patch("app.ChatOpenAI")
+    @patch("app.create_agent")
+    @patch("app.ChatOllama")
     def test_respects_llm_model_env(self, mock_llm_cls, mock_create):
         """LLM_MODEL env-var should override the default model name."""
         mock_create.return_value = MagicMock(name="compiled_agent")
         with patch.dict(
             "os.environ",
-            {"OPENAI_API_KEY": "sk-test-key", "LLM_MODEL": "gpt-4o"},
+            {"LLM_MODEL": "llama3"},
             clear=True,
         ):
             from app import get_agent
 
             get_agent.clear()
             get_agent()
-        mock_llm_cls.assert_called_once_with(model="gpt-4o", temperature=0)
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["model"] == "llama3"
 
-    @patch("app.create_react_agent")
-    @patch("app.ChatOpenAI")
+    @patch("app.create_agent")
+    @patch("app.ChatOllama")
     def test_temperature_is_zero(self, mock_llm_cls, mock_create):
         """LLM temperature should be 0 for deterministic support answers."""
         mock_create.return_value = MagicMock(name="compiled_agent")
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            from app import get_agent
+        from app import get_agent
 
-            get_agent.clear()
-            get_agent()
+        get_agent.clear()
+        get_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["temperature"] == 0
 

@@ -6,9 +6,8 @@ Strategy
 * The LLM and LangGraph components are fully mocked so the suite runs offline
   without any API keys.
 * We test:
-  - The system prompt content (persona, tool-usage rules).
+  - The system system_prompt content (persona, tool-usage rules).
   - ``initialize_agent()`` happy path (returns a compiled agent).
-  - ``initialize_agent()`` error path (missing API key raises ``ValueError``).
   - The interactive console loop behaviour (exit, empty input, normal query).
   - The module-level imports and exports.
 """
@@ -23,12 +22,12 @@ from agents.agent_orchestrator import SYSTEM_PROMPT, initialize_agent
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# System prompt validation
+# System system_prompt validation
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 class TestSystemPrompt:
-    """Verify the system prompt contains the required persona and rules."""
+    """Verify the system system_prompt contains the required persona and rules."""
 
     def test_contains_persona(self):
         assert "elite Tier-2 FinTech Support Agent" in SYSTEM_PROMPT
@@ -61,73 +60,79 @@ class TestSystemPrompt:
 class TestInitializeAgent:
     """Test the ``initialize_agent`` factory function."""
 
-    def test_raises_without_api_key(self):
-        """Must raise ValueError when OPENAI_API_KEY is absent."""
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-                initialize_agent()
-
-    def test_error_message_mentions_env_var(self):
-        """The error message should guide the user to set the key."""
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(ValueError, match="export"):
-                initialize_agent()
-
-    @patch("agents.agent_orchestrator.create_react_agent")
-    @patch("agents.agent_orchestrator.ChatOpenAI")
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
     def test_returns_agent_executor(self, mock_llm_cls, mock_create):
-        """With a valid key, the function should return the compiled agent."""
+        """With defaults, the function should return the compiled agent."""
         mock_create.return_value = MagicMock(name="compiled_agent")
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            agent = initialize_agent()
+        agent = initialize_agent()
         assert agent is mock_create.return_value
 
-    @patch("agents.agent_orchestrator.create_react_agent")
-    @patch("agents.agent_orchestrator.ChatOpenAI")
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
     def test_uses_default_model(self, mock_llm_cls, mock_create):
-        """Default model should be gpt-4o-mini when LLM_MODEL is not set."""
-        with patch.dict(
-            "os.environ", {"OPENAI_API_KEY": "sk-test-key"}, clear=True
-        ):
+        """Default model should be deepseek-r1 when LLM_MODEL is not set."""
+        with patch.dict("os.environ", {}, clear=True):
             initialize_agent()
-        mock_llm_cls.assert_called_once_with(model="gpt-4o-mini", temperature=0)
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["model"] == "deepseek-r1"
 
-    @patch("agents.agent_orchestrator.create_react_agent")
-    @patch("agents.agent_orchestrator.ChatOpenAI")
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
     def test_respects_llm_model_env(self, mock_llm_cls, mock_create):
         """LLM_MODEL env-var should override the default model name."""
         with patch.dict(
             "os.environ",
-            {"OPENAI_API_KEY": "sk-test-key", "LLM_MODEL": "gpt-4o"},
+            {"LLM_MODEL": "llama3"},
             clear=True,
         ):
             initialize_agent()
-        mock_llm_cls.assert_called_once_with(model="gpt-4o", temperature=0)
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["model"] == "llama3"
 
-    @patch("agents.agent_orchestrator.create_react_agent")
-    @patch("agents.agent_orchestrator.ChatOpenAI")
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_tools_to_react_agent(self, mock_llm_cls, mock_create):
-        """All three merchant_support_tools must be passed to create_react_agent."""
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            initialize_agent()
+        """All three merchant_support_tools must be passed to create_agent."""
+        initialize_agent()
         _, kwargs = mock_create.call_args
         assert "tools" in kwargs
         assert len(kwargs["tools"]) == 3
 
-    @patch("agents.agent_orchestrator.create_react_agent")
-    @patch("agents.agent_orchestrator.ChatOpenAI")
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_system_prompt_as_prompt(self, mock_llm_cls, mock_create):
-        """The system prompt must be forwarded as the prompt parameter."""
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            initialize_agent()
+        """The system prompt must be forwarded as the system_prompt parameter."""
+        initialize_agent()
         _, kwargs = mock_create.call_args
-        assert kwargs.get("prompt") == SYSTEM_PROMPT
+        assert kwargs.get("system_prompt") == SYSTEM_PROMPT
 
-    @patch("agents.agent_orchestrator.create_react_agent")
-    @patch("agents.agent_orchestrator.ChatOpenAI")
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
     def test_temperature_is_zero(self, mock_llm_cls, mock_create):
         """LLM temperature should be 0 for deterministic support answers."""
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
-            initialize_agent()
+        initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["temperature"] == 0
+
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_default_ollama_base_url(self, mock_llm_cls, mock_create):
+        """Default Ollama base URL should be http://localhost:11434."""
+        with patch.dict("os.environ", {}, clear=True):
+            initialize_agent()
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["base_url"] == "http://localhost:11434"
+
+    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_respects_ollama_base_url_env(self, mock_llm_cls, mock_create):
+        """OLLAMA_BASE_URL env-var should override the default base URL."""
+        with patch.dict(
+            "os.environ",
+            {"OLLAMA_BASE_URL": "http://remote-host:11434"},
+            clear=True,
+        ):
+            initialize_agent()
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["base_url"] == "http://remote-host:11434"

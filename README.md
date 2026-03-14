@@ -43,7 +43,7 @@ ai-intelligent-support/
 |---|---|
 | API | FastAPI + Uvicorn |
 | Agentic AI | LangChain, LangGraph |
-| LLM | OpenAI GPT-4o (or Gemini) |
+| LLM | Ollama (DeepSeek R1, local) |
 | Machine Learning | Scikit-learn, XGBoost |
 | Data | Pandas, Faker |
 | Testing | Pytest, HTTPX |
@@ -95,7 +95,14 @@ Copy-Item .env.example .env
 copy .env.example .env
 ```
 
-Open `.env` in any text editor and add your `OPENAI_API_KEY`.
+Open `.env` in any text editor and adjust `LLM_MODEL` or `OLLAMA_BASE_URL` if needed
+(defaults: `deepseek-r1` on `http://localhost:11434`).
+
+> **Ollama prerequisite:** Make sure you have [Ollama](https://ollama.com/) installed
+> and the DeepSeek R1 model pulled:
+> ```bash
+> ollama pull deepseek-r1
+> ```
 
 ### 4. Run the API server
 

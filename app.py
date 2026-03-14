@@ -6,14 +6,16 @@ UI.  It provides a conversational interface where merchants can ask questions
 about transaction declines, webhook errors, and payout schedules, and receive
 autonomous, tool-backed answers from the AI agent.
 
+The LLM backend is **Ollama** (local), so no cloud API key is required.
+
 Usage::
 
     streamlit run app.py
 
 Environment variables
 ---------------------
-* ``OPENAI_API_KEY`` – Required for the OpenAI backend.
-* ``LLM_MODEL``      – Override the model name (default: ``gpt-4o-mini``).
+* ``LLM_MODEL``       – Override the model name (default: ``deepseek-r1``).
+* ``OLLAMA_BASE_URL`` – Ollama server URL (default: ``http://localhost:11434``).
 """
 
 from __future__ import annotations
@@ -21,9 +23,9 @@ from __future__ import annotations
 import os
 
 import streamlit as st
+from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain_ollama import ChatOllama
 
 from agents.agent_tools import merchant_support_tools
 from agents.agent_orchestrator import SYSTEM_PROMPT
@@ -48,33 +50,24 @@ def get_agent():
     """
     Initialise and return a LangGraph ReAct agent executor.
 
-    The agent is backed by ``ChatOpenAI`` (model configurable via the
+    The agent is backed by ``ChatOllama`` (model configurable via the
     ``LLM_MODEL`` env-var) and bound to the three merchant-support tools.
 
     Returns:
         The compiled LangGraph agent executor (a ``CompiledGraph``).
-
-    Raises:
-        ValueError: If the ``OPENAI_API_KEY`` environment variable is not set.
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "OPENAI_API_KEY is not set.  "
-            "Please export it in your shell or add it to your .env file:\n"
-            "  export OPENAI_API_KEY='sk-...'"
-        )
-
-    model_name = os.environ.get("LLM_MODEL", "gpt-4o-mini")
-    llm = ChatOpenAI(
+    model_name = os.environ.get("LLM_MODEL", "deepseek-r1")
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    llm = ChatOllama(
         model=model_name,
         temperature=0,
+        base_url=base_url,
     )
 
-    agent_executor = create_react_agent(
+    agent_executor = create_agent(
         llm,
         tools=merchant_support_tools,
-        prompt=SYSTEM_PROMPT,
+        system_prompt=SYSTEM_PROMPT,
     )
 
     return agent_executor

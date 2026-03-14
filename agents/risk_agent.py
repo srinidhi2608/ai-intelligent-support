@@ -9,7 +9,7 @@ with structured risk signals from the FraudDetector ML model.
 import os
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
 from agents.tools import get_merchant_profile
 
@@ -51,14 +51,15 @@ class RiskAgent:
         Initialise the LLM and bind KYB/KYC-specific tools.
 
         Args:
-            model_name: OpenAI model to use.  Falls back to the ``LLM_MODEL``
-                        environment variable, then to ``gpt-4o``.
+            model_name: Ollama model to use.  Falls back to the ``LLM_MODEL``
+                        environment variable, then to ``deepseek-r1``.
         """
-        self.model_name = model_name or os.getenv("LLM_MODEL", "gpt-4o")
+        self.model_name = model_name or os.getenv("LLM_MODEL", "deepseek-r1")
 
-        self.llm = ChatOpenAI(
+        self.llm = ChatOllama(
             model=self.model_name,
             temperature=0,
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         )
 
         self._tools = [get_merchant_profile]
