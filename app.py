@@ -1,14 +1,14 @@
 """
 app.py – Streamlit Chat Interface for Intelligent Merchant Support (Phase 6).
 
-This module wraps the existing LangGraph ReAct agent in a clean Streamlit chat
+This module wraps the LangChain tool-calling agent in a clean Streamlit chat
 UI.  It provides a conversational interface where merchants can ask questions
 about transaction declines, webhook errors, and payout schedules, and receive
 autonomous, tool-backed answers from the AI agent.
 
 The LLM backend is **Ollama** (local), so no cloud API key is required.
-A **tool-capable** model (e.g. ``llama3.1``) is used because the ReAct agent
-relies on native tool-calling support.
+A **tool-capable** model (e.g. ``llama3.1``) is used because the agent
+relies on native tool-calling (function-calling) support.
 
 Usage::
 
@@ -16,21 +16,15 @@ Usage::
 
 Environment variables
 ---------------------
-* ``TOOL_LLM_MODEL``  – Tool-capable model name (default: ``llama3.1``).
+* ``LLM_MODEL``       – Tool-capable model name (default: ``llama3.1``).
 * ``OLLAMA_BASE_URL`` – Ollama server URL (default: ``http://localhost:11434``).
 """
 
 from __future__ import annotations
 
-import os
-
 import streamlit as st
-from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_ollama import ChatOllama
 
-from agents.agent_tools import merchant_support_tools
-from agents.agent_orchestrator import SYSTEM_PROMPT
+from agents.agent_orchestrator import SYSTEM_PROMPT, initialize_agent
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page configuration
@@ -50,32 +44,15 @@ st.set_page_config(
 @st.cache_resource
 def get_agent():
     """
-    Initialise and return a LangGraph ReAct agent executor.
+    Initialise and return a LangChain tool-calling agent executor.
 
-    The agent is backed by ``ChatOllama`` using a **tool-capable** model
-    (configurable via the ``TOOL_LLM_MODEL`` env-var, default ``llama3.1``)
-    and bound to the three merchant-support tools.
+    Delegates to ``initialize_agent()`` from ``agents.agent_orchestrator``
+    and caches the result so it survives Streamlit re-runs.
 
     Returns:
-        The compiled LangGraph agent executor (a ``CompiledGraph``).
+        An ``AgentExecutor`` instance ready to invoke.
     """
-    # Must be a tool-capable model (e.g. llama3.1, qwen2.5, mistral).
-    # deepseek-r1 does NOT support tool calling.
-    model_name = os.environ.get("TOOL_LLM_MODEL", "llama3.1")
-    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    llm = ChatOllama(
-        model=model_name,
-        temperature=0,
-        base_url=base_url,
-    )
-
-    agent_executor = create_agent(
-        llm,
-        tools=merchant_support_tools,
-        system_prompt=SYSTEM_PROMPT,
-    )
-
-    return agent_executor
+    return initialize_agent()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -121,16 +98,11 @@ if user_prompt:
     with st.spinner("Agent is investigating telemetry data..."):
         try:
             agent = get_agent()
-            response = agent.invoke(
-                {"messages": [HumanMessage(content=user_prompt)]}
-            )
+            response = agent.invoke({"input": user_prompt})
 
-            # Extract the final AI message from the response
-            ai_messages = response.get("messages", [])
-            if ai_messages:
-                final_message = ai_messages[-1]
-                assistant_reply = final_message.content
-            else:
+            # Extract the final output from the response
+            assistant_reply = response.get("output", "")
+            if not assistant_reply:
                 assistant_reply = (
                     "⚠️ The agent did not produce a response. "
                     "Please try rephrasing your question."
