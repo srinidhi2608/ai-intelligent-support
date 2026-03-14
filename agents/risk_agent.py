@@ -9,7 +9,7 @@ with structured risk signals from the FraudDetector ML model.
 import os
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 
 from agents.tools import get_merchant_profile
 
@@ -48,21 +48,24 @@ class RiskAgent:
 
     def __init__(self, model_name: str | None = None) -> None:
         """
-        Initialise the LLM and bind KYB/KYC-specific tools.
+        Initialise the LLM for reasoning-based risk assessment.
 
         Args:
-            model_name: OpenAI model to use.  Falls back to the ``LLM_MODEL``
-                        environment variable, then to ``gpt-4o``.
+            model_name: Ollama model to use.  Falls back to the ``LLM_MODEL``
+                        environment variable, then to ``deepseek-r1``.
         """
-        self.model_name = model_name or os.getenv("LLM_MODEL", "gpt-4o")
+        self.model_name = model_name or os.getenv("LLM_MODEL", "deepseek-r1")
 
-        self.llm = ChatOpenAI(
+        # Uses a reasoning-only model (deepseek-r1 by default).
+        # Tool calling is NOT used here; the LLM reasons directly.
+        self.llm = ChatOllama(
             model=self.model_name,
             temperature=0,
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         )
 
+        # Available tools (for reference / future ReAct loop implementation)
         self._tools = [get_merchant_profile]
-        self.llm_with_tools = self.llm.bind_tools(self._tools)
 
     # ──────────────────────────────────────────────────────────────────────
     # Public interface
@@ -92,5 +95,7 @@ class RiskAgent:
             HumanMessage(content=user_message),
         ]
 
-        response = self.llm_with_tools.invoke(messages)
+        # Reasoning-only LLM call (no tool binding – deepseek-r1 does
+        # not support native tool calling).
+        response = self.llm.invoke(messages)
         return response.content or "Unable to complete risk assessment."

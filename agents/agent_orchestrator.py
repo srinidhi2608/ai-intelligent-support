@@ -3,9 +3,14 @@ agents/agent_orchestrator.py – ReAct Agent Orchestrator for Intelligent
                                 Merchant Support (Phase 5).
 
 This module sets up a fully autonomous ReAct (Reasoning and Acting) loop using
-LangGraph's ``create_react_agent``.  The agent is bound to the three production
-tools defined in ``agents.agent_tools`` and orchestrated by a detailed system
-prompt that enforces strict tool-usage policies.
+``create_agent`` from ``langchain.agents``.  The agent is bound to the
+three production tools defined in ``agents.agent_tools`` and orchestrated by a
+detailed system prompt that enforces strict tool-usage policies.
+
+The LLM backend is **Ollama** (local), so no cloud API key is required.
+A **tool-capable** model (e.g. ``llama3.1``) is used here because the ReAct
+agent relies on native tool-calling support.  Reasoning-only models such as
+``deepseek-r1`` do **not** support tool calling and must not be used here.
 
 Usage (interactive console)::
 
@@ -16,8 +21,8 @@ and printing the agent's final response to stdout.  Type ``exit`` to quit.
 
 Environment variables
 ---------------------
-* ``OPENAI_API_KEY`` – Required for the OpenAI backend.
-* ``LLM_MODEL``      – Override the model name (default: ``gpt-4o-mini``).
+* ``TOOL_LLM_MODEL``  – Tool-capable model name (default: ``llama3.1``).
+* ``OLLAMA_BASE_URL`` – Ollama server URL (default: ``http://localhost:11434``).
 """
 
 from __future__ import annotations
@@ -25,9 +30,9 @@ from __future__ import annotations
 import os
 import sys
 
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain_ollama import ChatOllama
 
 from agents.agent_tools import merchant_support_tools
 
@@ -67,39 +72,34 @@ def initialize_agent():
 
     The function:
 
-    1. Instantiates a ``ChatOpenAI`` LLM (model configurable via the
-       ``LLM_MODEL`` env-var, defaulting to ``gpt-4o-mini``).
+    1. Instantiates a ``ChatOllama`` LLM backed by a local Ollama server
+       using a **tool-capable** model (configurable via the
+       ``TOOL_LLM_MODEL`` env-var, defaulting to ``llama3.1``).
+       Reasoning-only models like ``deepseek-r1`` do **not** support
+       tool calling and will raise a 400 error if used here.
     2. Binds the three merchant-support tools to it.
-    3. Wraps everything in a LangGraph ``create_react_agent`` with the system
-       prompt via the ``prompt`` parameter.
+    3. Wraps everything in ``create_agent`` (from ``langchain.agents``)
+       with the system prompt via the ``system_prompt`` parameter.
 
     Returns:
         The compiled LangGraph agent executor (a ``CompiledGraph``).
-
-    Raises:
-        ValueError: If the ``OPENAI_API_KEY`` environment variable is not set.
     """
-    # ── Validate API key early to give a helpful error message ────────────
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "OPENAI_API_KEY is not set.  "
-            "Please export it in your shell or add it to your .env file:\n"
-            "  export OPENAI_API_KEY='sk-...'"
-        )
-
-    # ── Initialise the LLM ───────────────────────────────────────────────
-    model_name = os.environ.get("LLM_MODEL", "gpt-4o-mini")
-    llm = ChatOpenAI(
+    # ── Initialise the LLM (local Ollama – no API key required) ──────────
+    # Must be a tool-capable model (e.g. llama3.1, qwen2.5, mistral).
+    # deepseek-r1 does NOT support tool calling.
+    model_name = os.environ.get("TOOL_LLM_MODEL", "llama3.1")
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    llm = ChatOllama(
         model=model_name,
         temperature=0,  # deterministic for support use-cases
+        base_url=base_url,
     )
 
     # ── Build the LangGraph ReAct agent ──────────────────────────────────
-    agent_executor = create_react_agent(
+    agent_executor = create_agent(
         llm,
         tools=merchant_support_tools,
-        prompt=SYSTEM_PROMPT,
+        system_prompt=SYSTEM_PROMPT,
     )
 
     return agent_executor
