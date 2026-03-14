@@ -116,12 +116,12 @@ class TestInitializeAgent:
 
     @patch("agents.agent_orchestrator.create_react_agent")
     @patch("agents.agent_orchestrator.ChatOpenAI")
-    def test_passes_system_prompt_as_state_modifier(self, mock_llm_cls, mock_create):
-        """The system prompt must be forwarded as state_modifier."""
+    def test_passes_system_prompt_as_prompt(self, mock_llm_cls, mock_create):
+        """The system prompt must be forwarded as the prompt parameter."""
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
             initialize_agent()
         _, kwargs = mock_create.call_args
-        assert kwargs.get("state_modifier") == SYSTEM_PROMPT
+        assert kwargs.get("prompt") == SYSTEM_PROMPT
 
     @patch("agents.agent_orchestrator.create_react_agent")
     @patch("agents.agent_orchestrator.ChatOpenAI")

@@ -71,7 +71,7 @@ def initialize_agent():
        ``LLM_MODEL`` env-var, defaulting to ``gpt-4o-mini``).
     2. Binds the three merchant-support tools to it.
     3. Wraps everything in a LangGraph ``create_react_agent`` with the system
-       prompt as the ``state_modifier``.
+       prompt via the ``prompt`` parameter.
 
     Returns:
         The compiled LangGraph agent executor (a ``CompiledGraph``).
@@ -99,7 +99,7 @@ def initialize_agent():
     agent_executor = create_react_agent(
         llm,
         tools=merchant_support_tools,
-        state_modifier=SYSTEM_PROMPT,
+        prompt=SYSTEM_PROMPT,
     )
 
     return agent_executor
