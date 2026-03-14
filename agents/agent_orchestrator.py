@@ -1,16 +1,18 @@
 """
-agents/agent_orchestrator.py – ReAct Agent Orchestrator for Intelligent
+agents/agent_orchestrator.py – Tool-Calling Agent Orchestrator for Intelligent
                                 Merchant Support (Phase 5).
 
-This module sets up a fully autonomous ReAct (Reasoning and Acting) loop using
-``create_agent`` from ``langchain.agents``.  The agent is bound to the
-three production tools defined in ``agents.agent_tools`` and orchestrated by a
-detailed system prompt that enforces strict tool-usage policies.
+This module sets up a fully autonomous tool-calling agent using
+``create_tool_calling_agent`` and ``AgentExecutor`` from ``langchain.agents``.
+The agent is bound to the three production tools defined in
+``agents.agent_tools`` and orchestrated by a detailed system prompt that
+enforces strict tool-usage policies.
 
 The LLM backend is **Ollama** (local), so no cloud API key is required.
-A **tool-capable** model (e.g. ``llama3.1``) is used here because the ReAct
-agent relies on native tool-calling support.  Reasoning-only models such as
-``deepseek-r1`` do **not** support tool calling and must not be used here.
+A **tool-capable** model (e.g. ``llama3.1``) is used here because the agent
+relies on native tool-calling (function-calling) support.  Reasoning-only
+models such as ``deepseek-r1`` do **not** support tool calling and must not
+be used here.
 
 Usage (interactive console)::
 
@@ -21,7 +23,7 @@ and printing the agent's final response to stdout.  Type ``exit`` to quit.
 
 Environment variables
 ---------------------
-* ``TOOL_LLM_MODEL``  – Tool-capable model name (default: ``llama3.1``).
+* ``LLM_MODEL``       – Tool-capable model name (default: ``llama3.1``).
 * ``OLLAMA_BASE_URL`` – Ollama server URL (default: ``http://localhost:11434``).
 """
 
@@ -30,8 +32,8 @@ from __future__ import annotations
 import os
 import sys
 
-from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 
 from agents.agent_tools import merchant_support_tools
@@ -41,6 +43,11 @@ from agents.agent_tools import merchant_support_tools
 # ──────────────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = (
+    "You are an AI Agent with access to specific tools. "
+    "You MUST use the provided tools to fetch data before answering. "
+    "Do not guess or hallucinate. "
+    "If a user asks about a transaction, you MUST call the fetch_transaction_logs tool. "
+    "If you see a 500-level error in a webhook log, you MUST call retry_failed_webhook.\n\n"
     "You are an elite Tier-2 FinTech Support Agent. Your job is to diagnose "
     "merchant payment issues, explain errors clearly, and execute remediations.\n\n"
     "## Strict Tool-Usage Rules\n\n"
@@ -68,38 +75,47 @@ SYSTEM_PROMPT = (
 
 def initialize_agent():
     """
-    Create and return a LangGraph ReAct agent executor.
+    Create and return a LangChain tool-calling agent executor.
 
     The function:
 
     1. Instantiates a ``ChatOllama`` LLM backed by a local Ollama server
        using a **tool-capable** model (configurable via the
-       ``TOOL_LLM_MODEL`` env-var, defaulting to ``llama3.1``).
+       ``LLM_MODEL`` env-var, defaulting to ``llama3.1``).
        Reasoning-only models like ``deepseek-r1`` do **not** support
        tool calling and will raise a 400 error if used here.
-    2. Binds the three merchant-support tools to it.
-    3. Wraps everything in ``create_agent`` (from ``langchain.agents``)
-       with the system prompt via the ``system_prompt`` parameter.
+    2. Builds a ``ChatPromptTemplate`` with the system prompt, human
+       message, and agent scratchpad placeholder.
+    3. Creates a tool-calling agent with ``create_tool_calling_agent``.
+    4. Wraps everything in ``AgentExecutor`` for verbose, step-by-step
+       execution.
 
     Returns:
-        The compiled LangGraph agent executor (a ``CompiledGraph``).
+        An ``AgentExecutor`` instance ready to invoke.
     """
     # ── Initialise the LLM (local Ollama – no API key required) ──────────
     # Must be a tool-capable model (e.g. llama3.1, qwen2.5, mistral).
     # deepseek-r1 does NOT support tool calling.
-    model_name = os.environ.get("TOOL_LLM_MODEL", "llama3.1")
-    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    llm = ChatOllama(
-        model=model_name,
-        temperature=0,  # deterministic for support use-cases
-        base_url=base_url,
+    model_name = os.environ.get("LLM_MODEL", "llama3.1")
+    llm = ChatOllama(model=model_name, temperature=0)
+
+    # ── Build the prompt template ─────────────────────────────────────────
+    prompt_template = ChatPromptTemplate.from_messages(
+        [
+            ("system", SYSTEM_PROMPT),
+            ("human", "{input}"),
+            ("placeholder", "{agent_scratchpad}"),
+        ]
     )
 
-    # ── Build the LangGraph ReAct agent ──────────────────────────────────
-    agent_executor = create_agent(
-        llm,
-        tools=merchant_support_tools,
-        system_prompt=SYSTEM_PROMPT,
+    # ── Build the tool-calling agent ──────────────────────────────────────
+    agent = create_tool_calling_agent(
+        llm, tools=merchant_support_tools, prompt=prompt_template
+    )
+
+    # ── Wrap in AgentExecutor for verbose, step-by-step execution ────────
+    agent_executor = AgentExecutor(
+        agent=agent, tools=merchant_support_tools, verbose=True
     )
 
     return agent_executor
@@ -111,7 +127,7 @@ def initialize_agent():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  Intelligent Merchant Support – ReAct Agent Console")
+    print("  Intelligent Merchant Support – Tool-Calling Agent Console")
     print("=" * 60)
 
     try:
@@ -136,15 +152,12 @@ if __name__ == "__main__":
             print("Goodbye!")
             break
 
-        # Invoke the ReAct agent with the merchant's query
-        response = agent.invoke(
-            {"messages": [HumanMessage(content=user_input)]}
-        )
+        # Invoke the tool-calling agent with the merchant's query
+        response = agent.invoke({"input": user_input})
 
-        # Extract the final AI message from the response
-        ai_messages = response.get("messages", [])
-        if ai_messages:
-            final_message = ai_messages[-1]
-            print(f"\n🤖 Agent: {final_message.content}\n")
+        # Extract the final output from the response
+        output = response.get("output", "")
+        if output:
+            print(f"\n🤖 Agent: {output}\n")
         else:
             print("\n⚠️  The agent did not produce a response.\n")
