@@ -7,7 +7,7 @@ Strategy
   without any API keys.
 * We test:
   - ``get_agent()`` happy path (returns a compiled agent).
-  - The ``create_agent`` is called with ``prompt=`` (not ``state_modifier=``).
+  - The ``create_agent`` is called with ``system_prompt=`` (not ``state_modifier=``).
   - Module-level imports and constants are accessible.
 """
 

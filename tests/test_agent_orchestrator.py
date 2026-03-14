@@ -6,7 +6,7 @@ Strategy
 * The LLM and LangGraph components are fully mocked so the suite runs offline
   without any API keys.
 * We test:
-  - The system system_prompt content (persona, tool-usage rules).
+  - The system prompt content (persona, tool-usage rules).
   - ``initialize_agent()`` happy path (returns a compiled agent).
   - The interactive console loop behaviour (exit, empty input, normal query).
   - The module-level imports and exports.
@@ -22,12 +22,12 @@ from agents.agent_orchestrator import SYSTEM_PROMPT, initialize_agent
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# System system_prompt validation
+# System prompt validation
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 class TestSystemPrompt:
-    """Verify the system system_prompt contains the required persona and rules."""
+    """Verify the system prompt contains the required persona and rules."""
 
     def test_contains_persona(self):
         assert "elite Tier-2 FinTech Support Agent" in SYSTEM_PROMPT
