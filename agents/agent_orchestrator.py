@@ -16,8 +16,7 @@ and printing the agent's final response to stdout.  Type ``exit`` to quit.
 
 Environment variables
 ---------------------
-* ``OPENAI_API_KEY`` – Required when using the default OpenAI backend.
-* ``GOOGLE_API_KEY`` – Required if you switch to ``ChatGoogleGenerativeAI``.
+* ``OPENAI_API_KEY`` – Required for the OpenAI backend.
 * ``LLM_MODEL``      – Override the model name (default: ``gpt-4o-mini``).
 """
 
@@ -26,7 +25,7 @@ from __future__ import annotations
 import os
 import sys
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
@@ -86,9 +85,7 @@ def initialize_agent():
         raise ValueError(
             "OPENAI_API_KEY is not set.  "
             "Please export it in your shell or add it to your .env file:\n"
-            "  export OPENAI_API_KEY='sk-...'\n"
-            "If you are using Google Gemini instead, set GOOGLE_API_KEY and "
-            "swap ChatOpenAI for ChatGoogleGenerativeAI in this file."
+            "  export OPENAI_API_KEY='sk-...'"
         )
 
     # ── Initialise the LLM ───────────────────────────────────────────────
