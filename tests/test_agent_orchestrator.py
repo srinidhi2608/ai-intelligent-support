@@ -151,3 +151,27 @@ class TestInitializeAgent:
         initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["temperature"] == 0
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_default_ollama_base_url(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """Default Ollama base URL should be http://localhost:11434."""
+        with patch.dict("os.environ", {}, clear=True):
+            initialize_agent()
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["base_url"] == "http://localhost:11434"
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_respects_ollama_base_url_env(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """OLLAMA_BASE_URL env-var should override the default base URL."""
+        with patch.dict(
+            "os.environ",
+            {"OLLAMA_BASE_URL": "http://remote-host:11434"},
+            clear=True,
+        ):
+            initialize_agent()
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs["base_url"] == "http://remote-host:11434"

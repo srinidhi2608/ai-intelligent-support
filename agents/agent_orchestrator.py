@@ -97,7 +97,8 @@ def initialize_agent():
     # Must be a tool-capable model (e.g. llama3.1, qwen2.5, mistral).
     # deepseek-r1 does NOT support tool calling.
     model_name = os.environ.get("LLM_MODEL", "llama3.1")
-    llm = ChatOllama(model=model_name, temperature=0)
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    llm = ChatOllama(model=model_name, temperature=0, base_url=base_url)
 
     # ── Build the prompt template ─────────────────────────────────────────
     prompt_template = ChatPromptTemplate.from_messages(
