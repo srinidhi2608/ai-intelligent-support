@@ -208,6 +208,64 @@ class TestGetTransactionEndpoint:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# GET /api/v1/transactions/{transaction_id}/details
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetTransactionDetailsEndpoint:
+    def test_found_returns_200(self, client):
+        r = client.get("/api/v1/transactions/TXN-00000001/details")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["transaction_id"] == "TXN-00000001"
+        assert data["status"] == "SUCCESS"
+        assert data["amount"] == 1500.00
+
+    def test_includes_webhook_log_with_success(self, client):
+        r = client.get("/api/v1/transactions/TXN-00000001/details")
+        assert r.status_code == 200
+        data = r.json()
+        assert "webhook_log" in data
+        assert data["webhook_log"]["log_id"] == "WH-00000001"
+        assert data["webhook_log"]["http_status"] == 200
+
+    def test_webhook_log_shows_500_for_failed_delivery(self, client):
+        r = client.get("/api/v1/transactions/TXN-00000002/details")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["webhook_log"]["log_id"] == "WH-00000002"
+        assert data["webhook_log"]["http_status"] == 500
+
+    def test_not_found_returns_404(self, client):
+        r = client.get("/api/v1/transactions/TXN-MISSING/details")
+        assert r.status_code == 404
+
+    def test_transaction_fields_present(self, client):
+        r = client.get("/api/v1/transactions/TXN-00000001/details")
+        data = r.json()
+        required_keys = {
+            "transaction_id", "merchant_id", "timestamp",
+            "amount", "currency", "status",
+        }
+        assert required_keys.issubset(set(data.keys()))
+
+    def test_webhook_log_fields_present(self, client):
+        r = client.get("/api/v1/transactions/TXN-00000001/details")
+        wh = r.json()["webhook_log"]
+        required_keys = {
+            "log_id", "transaction_id", "timestamp",
+            "event_type", "http_status", "delivery_attempts", "latency_ms",
+        }
+        assert required_keys.issubset(set(wh.keys()))
+
+    def test_declined_transaction_has_decline_code(self, client):
+        r = client.get("/api/v1/transactions/TXN-00000002/details")
+        data = r.json()
+        assert data["status"] == "DECLINED"
+        assert data["decline_code"] == "51_Insufficient_Funds"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GET /api/v1/merchants/{merchant_id}/webhooks
 # ──────────────────────────────────────────────────────────────────────────────
 

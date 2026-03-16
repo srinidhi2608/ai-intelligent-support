@@ -283,6 +283,32 @@ class DataLoader:
 
         return self._to_records(logs.head(limit))
 
+    def get_webhook_log_for_transaction(self, transaction_id: str) -> Optional[dict]:
+        """
+        Return the webhook log entry associated with a specific transaction.
+
+        Parameters
+        ----------
+        transaction_id:
+            The ``transaction_id`` to look up (e.g. ``"TXN-00000001"``).
+
+        Returns
+        -------
+        dict | None
+            A dictionary of the webhook log fields, or ``None`` if no log
+            exists for this transaction.
+        """
+        if self.webhook_logs.empty:
+            return None
+
+        rows = self.webhook_logs[
+            self.webhook_logs["transaction_id"] == transaction_id
+        ]
+        if rows.empty:
+            return None
+
+        return self._to_record(rows.iloc[0])
+
     def update_webhook_status(self, log_id: str, new_status: int) -> bool:
         """
         Simulate an agentic webhook retry by updating the ``http_status``

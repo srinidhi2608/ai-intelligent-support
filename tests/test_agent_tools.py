@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agents.agent_tools import (
+    fetch_merchant_diagnostics,
     fetch_transaction_logs,
     merchant_support_tools,
     retry_failed_webhook,
@@ -60,7 +61,7 @@ class TestToolMetadata:
             assert t.description and len(t.description) > 20
 
     def test_merchant_support_tools_length(self):
-        assert len(merchant_support_tools) == 3
+        assert len(merchant_support_tools) == 4
 
     def test_merchant_support_tools_order(self):
         names = [t.name for t in merchant_support_tools]
@@ -68,6 +69,7 @@ class TestToolMetadata:
             "fetch_transaction_logs",
             "retry_failed_webhook",
             "search_knowledge_base",
+            "fetch_merchant_diagnostics",
         ]
 
     def test_tools_are_langchain_callable(self):
@@ -97,6 +99,14 @@ class TestFetchTransactionLogs:
             fetch_transaction_logs.invoke({"transaction_id": "TXN-XYZ"})
         called_url = mock_get.call_args[0][0]
         assert "TXN-XYZ" in called_url
+
+    def test_url_uses_details_endpoint(self):
+        """fetch_transaction_logs must use the /details endpoint to include webhook data."""
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.return_value = _mock_response(200, text=self._TXN_JSON)
+            fetch_transaction_logs.invoke({"transaction_id": "TXN-001"})
+        called_url = mock_get.call_args[0][0]
+        assert "details" in called_url
 
     def test_404_returns_not_found_message(self):
         with patch("agents.agent_tools.requests.get") as mock_get:
@@ -349,3 +359,143 @@ class TestSearchKnowledgeBase:
         mock_retriever.invoke.assert_called_once_with(
             "Why did my transaction fail with code 93?"
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# fetch_merchant_diagnostics
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestFetchMerchantDiagnostics:
+    _TXN_LIST = [
+        {"transaction_id": "TXN-001", "status": "SUCCESS", "decline_code": None},
+        {"transaction_id": "TXN-002", "status": "DECLINED", "decline_code": "93_Risk_Block"},
+        {"transaction_id": "TXN-003", "status": "DECLINED", "decline_code": "93_Risk_Block"},
+    ]
+    _WH_LIST = [
+        {
+            "log_id": "WH-001", "transaction_id": "TXN-001",
+            "timestamp": "2026-03-07T10:00:05+00:00",
+            "event_type": "payment.success", "http_status": 200,
+            "delivery_attempts": 1, "latency_ms": 100,
+        },
+        {
+            "log_id": "WH-002", "transaction_id": "TXN-002",
+            "timestamp": "2026-03-07T10:01:05+00:00",
+            "event_type": "payment.failed", "http_status": 401,
+            "delivery_attempts": 3, "latency_ms": 300,
+        },
+        {
+            "log_id": "WH-003", "transaction_id": "TXN-003",
+            "timestamp": "2026-03-07T10:02:05+00:00",
+            "event_type": "payment.failed", "http_status": 401,
+            "delivery_attempts": 3, "latency_ms": 300,
+        },
+    ]
+
+    def _make_mocks(self):
+        return [
+            _mock_response(200, json_data=self._TXN_LIST),
+            _mock_response(200, json_data=self._WH_LIST),
+        ]
+
+    def test_returns_transaction_summary(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = self._make_mocks()
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "SUCCESS" in result
+        assert "DECLINED" in result
+
+    def test_reports_decline_code_frequency(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = self._make_mocks()
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "93_Risk_Block" in result
+        assert "2 occurrences" in result
+
+    def test_reports_webhook_status_frequency(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = self._make_mocks()
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "401" in result
+
+    def test_includes_log_ids_for_retry_reference(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = self._make_mocks()
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "WH-001" in result or "WH-002" in result or "WH-003" in result
+
+    def test_404_returns_not_found_message(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.return_value = _mock_response(404, text="Not Found")
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_99"}
+            )
+        assert "not found" in result.lower()
+        assert "merchant_id_99" in result
+
+    def test_unexpected_status_returns_error(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.return_value = _mock_response(503, text="Unavailable")
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_1"}
+            )
+        assert "503" in result or "unexpected" in result.lower()
+
+    def test_connection_error_returns_guidance(self):
+        import requests as req_lib
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = req_lib.exceptions.ConnectionError("refused")
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_1"}
+            )
+        assert "connect" in result.lower() or "gateway" in result.lower()
+
+    def test_timeout_returns_timeout_message(self):
+        import requests as req_lib
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = req_lib.exceptions.Timeout("timed out")
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_1"}
+            )
+        assert "timeout" in result.lower() or "timed out" in result.lower()
+
+    def test_generic_request_exception_returns_error(self):
+        import requests as req_lib
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = req_lib.exceptions.RequestException("boom")
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_1"}
+            )
+        assert "unexpected error" in result.lower() or "error" in result.lower()
+
+    def test_returns_string(self):
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = self._make_mocks()
+            result = fetch_merchant_diagnostics.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert isinstance(result, str)
+
+    def test_tool_has_correct_name(self):
+        assert fetch_merchant_diagnostics.name == "fetch_merchant_diagnostics"
+
+    def test_tool_has_non_empty_description(self):
+        assert fetch_merchant_diagnostics.description
+        assert len(fetch_merchant_diagnostics.description) > 20
+
+    def test_timeout_kwarg_is_set(self):
+        """Both GET calls must use explicit timeouts to avoid hanging."""
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.side_effect = self._make_mocks()
+            fetch_merchant_diagnostics.invoke({"merchant_id": "merchant_id_2"})
+        for call in mock_get.call_args_list:
+            assert "timeout" in call[1]

@@ -63,7 +63,7 @@ class TestGetAgent:
 
         _, kwargs = mock_executor_cls.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 3
+        assert len(kwargs["tools"]) == 4
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
