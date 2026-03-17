@@ -77,7 +77,8 @@ if "messages" not in st.session_state:
 
 # Render past messages
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
+    avatar = "👤" if msg["role"] == "user" else "🤖"
+    with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -91,11 +92,12 @@ user_prompt = st.chat_input(
 if user_prompt:
     # ── Display and record the user message ──────────────────────────────
     st.session_state.messages.append({"role": "user", "content": user_prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="👤"):
         st.markdown(user_prompt)
 
-    # ── Invoke the agent with a spinner ──────────────────────────────────
-    with st.spinner("Agent is investigating telemetry data..."):
+    # ── Invoke the agent, hiding intermediate tool calls in a collapsible
+    #    status widget so only the final answer reaches the main chat flow ──
+    with st.status("🔍 Agent is investigating...", expanded=False) as status:
         try:
             agent = get_agent()
             response = agent.invoke({"input": user_prompt})
@@ -108,18 +110,26 @@ if user_prompt:
                     "Please try rephrasing your question."
                 )
 
+            status.update(
+                label="✅ Investigation complete",
+                state="complete",
+                expanded=False,
+            )
+
         except ValueError as exc:
             assistant_reply = f"⚠️ Configuration error: {exc}"
+            status.update(label="⚠️ Configuration error", state="error")
         except Exception as exc:
             assistant_reply = (
                 f"⚠️ An unexpected error occurred: {exc}\n\n"
                 "Please ensure the FastAPI gateway is running "
                 "(`uvicorn main:app --reload`) and try again."
             )
+            status.update(label="⚠️ An error occurred", state="error")
 
     # ── Display and record the assistant response ────────────────────────
     st.session_state.messages.append(
         {"role": "assistant", "content": assistant_reply}
     )
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="🤖"):
         st.markdown(assistant_reply)

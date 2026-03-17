@@ -85,6 +85,22 @@ class TestSystemPrompt:
         """Prompt must require ONE final answer after all tool calls complete."""
         assert "ONE comprehensive" in SYSTEM_PROMPT or "single" in SYSTEM_PROMPT.lower()
 
+    def test_output_format_forbids_raw_json(self):
+        """Prompt must explicitly forbid raw JSON output."""
+        assert "raw JSON" in SYSTEM_PROMPT
+
+    def test_output_format_requires_natural_language(self):
+        """Prompt must explicitly require a natural language final response."""
+        assert "natural language" in SYSTEM_PROMPT.lower()
+
+    def test_output_format_identifies_customer_facing_agent(self):
+        """Prompt must label the agent as customer-facing in the output rules."""
+        assert "customer-facing" in SYSTEM_PROMPT
+
+    def test_output_format_instructs_synthesise(self):
+        """Prompt must instruct the agent to synthesise tool observations."""
+        assert "synthesise" in SYSTEM_PROMPT or "synthesize" in SYSTEM_PROMPT
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()

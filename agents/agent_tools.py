@@ -53,9 +53,11 @@ _REQUEST_TIMEOUT = 10
 @tool
 def fetch_transaction_logs(transaction_id: str) -> str:
     """
-    Fetch the live transaction details and webhook logs for a specific
-    transaction_id.  It returns the financial status, decline codes, and
-    webhook delivery status in JSON format.
+    Fetch the live transaction details and associated webhook delivery log for
+    a specific transaction_id.  Uses the ``/details`` endpoint, which returns
+    both the financial status and the webhook log in a single round-trip,
+    giving the agent the ``log_id`` needed to call ``retry_failed_webhook``
+    without a second network call.
 
     Use this tool as the **first step** whenever a merchant reports a payment
     issue, a mysterious decline, or a webhook delivery failure.  The returned
@@ -70,19 +72,23 @@ def fetch_transaction_logs(transaction_id: str) -> str:
     * ``decline_code``    – ISO 8583 decline reason (e.g. ``93_Risk_Block``,
                             ``51_Insufficient_Funds``).  ``null`` on success.
     * ``card_bin``        – First six digits of the card number (BIN).
+    * ``webhook_log``     – The associated webhook delivery record, including
+                            ``log_id``, ``http_status``, ``event_type``, and
+                            ``delivery_attempts``; ``null`` if no log exists.
 
     After calling this tool, if the ``decline_code`` is not obvious, use
-    ``search_knowledge_base`` to look up its meaning.  If the associated
-    webhook log shows a 5xx error, use ``retry_failed_webhook`` to remediate.
+    ``search_knowledge_base`` to look up its meaning.  If ``webhook_log``
+    shows a 5xx ``http_status``, use ``retry_failed_webhook`` with the
+    ``log_id`` from the webhook log to remediate.
 
     Args:
         transaction_id: The unique transaction identifier to look up
             (e.g. ``TXN-00000042``).
 
     Returns:
-        A JSON string containing full transaction details on success, or a
-        plain-English error message if the transaction is not found or the
-        gateway is unreachable.
+        A JSON string containing full transaction details and webhook log on
+        success, or a plain-English error message if the transaction is not
+        found or the gateway is unreachable.
     """
     url = f"{_GATEWAY_BASE_URL}/api/v1/transactions/{transaction_id}/details"
     try:
