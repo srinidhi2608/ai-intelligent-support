@@ -62,6 +62,20 @@ class WebhookLogResponse(BaseModel):
     latency_ms: int
 
 
+class TransactionDetailsResponse(BaseModel):
+    """Full transaction details enriched with the associated webhook delivery log."""
+
+    transaction_id: str
+    merchant_id: str
+    timestamp: str
+    amount: float
+    currency: str
+    status: str
+    decline_code: Optional[str] = None
+    card_bin: Optional[str] = None
+    webhook_log: Optional[WebhookLogResponse] = None
+
+
 class RetryResponse(BaseModel):
     """Result of a simulated webhook retry action."""
 
@@ -167,6 +181,51 @@ def get_merchant_transactions(
 
     rows = loader.get_recent_transactions(merchant_id, limit=limit)
     return [TransactionResponse(**row) for row in rows]
+
+
+@router.get(
+    "/transactions/{transaction_id}/details",
+    response_model=TransactionDetailsResponse,
+    summary="Get transaction details with associated webhook log",
+    responses={404: {"description": "Transaction not found"}},
+)
+def get_transaction_with_webhook(
+    transaction_id: str, request: Request
+) -> TransactionDetailsResponse:
+    """
+    Return the full details of a single transaction, enriched with its
+    associated webhook delivery log if one exists.
+
+    This is the preferred endpoint for the AI agent because it provides both
+    the financial status (including any ``decline_code``) AND the webhook
+    delivery status (including the ``log_id`` needed to call the retry
+    endpoint) in a single round-trip.
+
+    Parameters
+    ----------
+    transaction_id:
+        The unique transaction ID (e.g. ``TXN-00000001``).
+
+    Raises
+    ------
+    HTTPException(404):
+        If the transaction ID does not exist.
+    """
+    loader = _get_loader(request)
+    txn = loader.get_transaction_details(transaction_id)
+    if txn is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Transaction '{transaction_id}' not found.",
+        )
+
+    webhook_log = loader.get_webhook_log_for_transaction(transaction_id)
+    webhook_model = WebhookLogResponse(**webhook_log) if webhook_log else None
+
+    return TransactionDetailsResponse(
+        **txn,
+        webhook_log=webhook_model,
+    )
 
 
 @router.get(

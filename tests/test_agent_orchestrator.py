@@ -3,11 +3,11 @@ tests/test_agent_orchestrator.py – Unit tests for agents/agent_orchestrator.py
 
 Strategy
 --------
-* The LLM and LangGraph components are fully mocked so the suite runs offline
+* The LLM and LangChain components are fully mocked so the suite runs offline
   without any API keys.
 * We test:
-  - The system prompt content (persona, tool-usage rules).
-  - ``initialize_agent()`` happy path (returns a compiled agent).
+  - The system prompt content (persona, tool-usage rules, mandatory phrasing).
+  - ``initialize_agent()`` happy path (returns an AgentExecutor).
   - The interactive console loop behaviour (exit, empty input, normal query).
   - The module-level imports and exports.
 """
@@ -51,6 +51,69 @@ class TestSystemPrompt:
         assert isinstance(SYSTEM_PROMPT, str)
         assert len(SYSTEM_PROMPT) > 100
 
+    def test_contains_mandatory_tool_phrasing(self):
+        assert "You MUST use the provided tools to fetch data before answering" in SYSTEM_PROMPT
+
+    def test_contains_do_not_hallucinate(self):
+        assert "Do not guess or hallucinate" in SYSTEM_PROMPT
+
+    def test_mandatory_fetch_transaction_logs_call(self):
+        assert "you MUST call the fetch_transaction_logs tool" in SYSTEM_PROMPT
+
+    def test_mandatory_retry_failed_webhook_call(self):
+        assert "MUST call retry_failed_webhook" in SYSTEM_PROMPT
+
+    def test_prohibits_intermediate_responses(self):
+        """Prompt must explicitly ban mid-investigation partial replies."""
+        assert "NEVER emit" in SYSTEM_PROMPT
+
+    def test_enforces_chained_kb_lookup_after_decline_code(self):
+        """After fetching a decline_code, agent must call search_knowledge_base."""
+        assert "decline_code" in SYSTEM_PROMPT
+        assert "search_knowledge_base" in SYSTEM_PROMPT
+
+    def test_enforces_retry_on_implied_permission(self):
+        """Prompt must allow retry when permission is implied, not just explicit."""
+        prompt_lower = SYSTEM_PROMPT.lower()
+        assert "implicitly" in prompt_lower or "implied" in prompt_lower
+
+    def test_mentions_fetch_merchant_diagnostics_workflow(self):
+        """Prompt must reference fetch_merchant_diagnostics for merchant queries."""
+        assert "fetch_merchant_diagnostics" in SYSTEM_PROMPT
+
+    def test_enforces_single_comprehensive_response(self):
+        """Prompt must require ONE final answer after all tool calls complete."""
+        assert "ONE comprehensive" in SYSTEM_PROMPT or "single" in SYSTEM_PROMPT.lower()
+
+    def test_output_format_forbids_raw_json(self):
+        """Prompt must explicitly forbid raw JSON output."""
+        assert "raw JSON" in SYSTEM_PROMPT
+
+    def test_output_format_requires_natural_language(self):
+        """Prompt must explicitly require a natural language final response."""
+        assert "natural language" in SYSTEM_PROMPT.lower()
+
+    def test_output_format_identifies_customer_facing_agent(self):
+        """Prompt must label the agent as customer-facing in the output rules."""
+        assert "customer-facing" in SYSTEM_PROMPT
+
+    def test_output_format_instructs_synthesise(self):
+        """Prompt must instruct the agent to synthesise tool observations."""
+        assert "synthesise" in SYSTEM_PROMPT or "synthesize" in SYSTEM_PROMPT
+
+    def test_workflow_a_skips_kb_when_decline_code_null(self):
+        """Prompt must explicitly instruct the agent to skip search_knowledge_base
+        when decline_code is null/None (successful transaction)."""
+        prompt_lower = SYSTEM_PROMPT.lower()
+        assert "null" in prompt_lower or "none" in prompt_lower
+        assert "skip" in prompt_lower or "successful" in prompt_lower
+
+    def test_workflow_a_query_must_be_string(self):
+        """Prompt must explicitly state that the query arg must be a plain string."""
+        assert "plain" in SYSTEM_PROMPT.lower() or "string" in SYSTEM_PROMPT.lower()
+        assert "query" in SYSTEM_PROMPT.lower()
+        assert "dict" in SYSTEM_PROMPT.lower() or "None" in SYSTEM_PROMPT
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()
@@ -60,73 +123,100 @@ class TestSystemPrompt:
 class TestInitializeAgent:
     """Test the ``initialize_agent`` factory function."""
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_returns_agent_executor(self, mock_llm_cls, mock_create):
-        """With defaults, the function should return the compiled agent."""
-        mock_create.return_value = MagicMock(name="compiled_agent")
+    def test_returns_agent_executor(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """With defaults, the function should return an AgentExecutor."""
+        mock_executor_cls.return_value = MagicMock(name="agent_executor")
         agent = initialize_agent()
-        assert agent is mock_create.return_value
+        assert agent is mock_executor_cls.return_value
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_uses_default_tool_model(self, mock_llm_cls, mock_create):
-        """Default model should be llama3.1 when TOOL_LLM_MODEL is not set."""
+    def test_uses_default_llm_model(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """Default model should be llama3.1 when LLM_MODEL is not set."""
         with patch.dict("os.environ", {}, clear=True):
             initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["model"] == "llama3.1"
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_respects_tool_llm_model_env(self, mock_llm_cls, mock_create):
-        """TOOL_LLM_MODEL env-var should override the default model name."""
+    def test_respects_llm_model_env(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """LLM_MODEL env-var should override the default model name."""
         with patch.dict(
             "os.environ",
-            {"TOOL_LLM_MODEL": "qwen2.5"},
+            {"LLM_MODEL": "qwen2.5"},
             clear=True,
         ):
             initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["model"] == "qwen2.5"
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_passes_tools_to_react_agent(self, mock_llm_cls, mock_create):
-        """All three merchant_support_tools must be passed to create_agent."""
+    def test_passes_tools_to_agent_executor(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """All four merchant_support_tools must be passed to AgentExecutor."""
+        initialize_agent()
+        _, kwargs = mock_executor_cls.call_args
+        assert "tools" in kwargs
+        assert len(kwargs["tools"]) == 4
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_passes_tools_to_create_tool_calling_agent(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """All four merchant_support_tools must be passed to create_tool_calling_agent."""
         initialize_agent()
         _, kwargs = mock_create.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 3
+        assert len(kwargs["tools"]) == 4
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_passes_system_prompt_as_prompt(self, mock_llm_cls, mock_create):
-        """The system prompt must be forwarded as the system_prompt parameter."""
+    def test_passes_prompt_to_create_tool_calling_agent(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """A ChatPromptTemplate must be forwarded as the prompt parameter."""
         initialize_agent()
         _, kwargs = mock_create.call_args
-        assert kwargs.get("system_prompt") == SYSTEM_PROMPT
+        assert "prompt" in kwargs
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_temperature_is_zero(self, mock_llm_cls, mock_create):
+    def test_agent_executor_is_verbose(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """AgentExecutor must be created with verbose=True."""
+        initialize_agent()
+        _, kwargs = mock_executor_cls.call_args
+        assert kwargs.get("verbose") is True
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_temperature_is_zero(self, mock_llm_cls, mock_create, mock_executor_cls):
         """LLM temperature should be 0 for deterministic support answers."""
         initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["temperature"] == 0
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_default_ollama_base_url(self, mock_llm_cls, mock_create):
+    def test_default_ollama_base_url(self, mock_llm_cls, mock_create, mock_executor_cls):
         """Default Ollama base URL should be http://localhost:11434."""
         with patch.dict("os.environ", {}, clear=True):
             initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["base_url"] == "http://localhost:11434"
 
-    @patch("agents.agent_orchestrator.create_agent")
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
-    def test_respects_ollama_base_url_env(self, mock_llm_cls, mock_create):
+    def test_respects_ollama_base_url_env(self, mock_llm_cls, mock_create, mock_executor_cls):
         """OLLAMA_BASE_URL env-var should override the default base URL."""
         with patch.dict(
             "os.environ",
@@ -136,3 +226,21 @@ class TestInitializeAgent:
             initialize_agent()
         _, kwargs = mock_llm_cls.call_args
         assert kwargs["base_url"] == "http://remote-host:11434"
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_agent_executor_handle_parsing_errors(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """AgentExecutor must be configured with handle_parsing_errors=True."""
+        initialize_agent()
+        _, kwargs = mock_executor_cls.call_args
+        assert kwargs.get("handle_parsing_errors") is True
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_agent_executor_max_iterations(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """AgentExecutor must allow enough iterations for multi-step tool chaining."""
+        initialize_agent()
+        _, kwargs = mock_executor_cls.call_args
+        assert kwargs.get("max_iterations") == 25

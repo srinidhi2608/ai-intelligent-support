@@ -33,6 +33,7 @@ from typing import Any
 
 import requests
 from langchain_core.tools import tool
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from rag_setup import get_retriever
 
@@ -53,9 +54,11 @@ _REQUEST_TIMEOUT = 10
 @tool
 def fetch_transaction_logs(transaction_id: str) -> str:
     """
-    Fetch the live transaction details and webhook logs for a specific
-    transaction_id.  It returns the financial status, decline codes, and
-    webhook delivery status in JSON format.
+    Fetch the live transaction details and associated webhook delivery log for
+    a specific transaction_id.  Uses the ``/details`` endpoint, which returns
+    both the financial status and the webhook log in a single round-trip,
+    giving the agent the ``log_id`` needed to call ``retry_failed_webhook``
+    without a second network call.
 
     Use this tool as the **first step** whenever a merchant reports a payment
     issue, a mysterious decline, or a webhook delivery failure.  The returned
@@ -70,21 +73,25 @@ def fetch_transaction_logs(transaction_id: str) -> str:
     * ``decline_code``    – ISO 8583 decline reason (e.g. ``93_Risk_Block``,
                             ``51_Insufficient_Funds``).  ``null`` on success.
     * ``card_bin``        – First six digits of the card number (BIN).
+    * ``webhook_log``     – The associated webhook delivery record, including
+                            ``log_id``, ``http_status``, ``event_type``, and
+                            ``delivery_attempts``; ``null`` if no log exists.
 
     After calling this tool, if the ``decline_code`` is not obvious, use
-    ``search_knowledge_base`` to look up its meaning.  If the associated
-    webhook log shows a 5xx error, use ``retry_failed_webhook`` to remediate.
+    ``search_knowledge_base`` to look up its meaning.  If ``webhook_log``
+    shows a 5xx ``http_status``, use ``retry_failed_webhook`` with the
+    ``log_id`` from the webhook log to remediate.
 
     Args:
         transaction_id: The unique transaction identifier to look up
             (e.g. ``TXN-00000042``).
 
     Returns:
-        A JSON string containing full transaction details on success, or a
-        plain-English error message if the transaction is not found or the
-        gateway is unreachable.
+        A JSON string containing full transaction details and webhook log on
+        success, or a plain-English error message if the transaction is not
+        found or the gateway is unreachable.
     """
-    url = f"{_GATEWAY_BASE_URL}/api/v1/transactions/{transaction_id}"
+    url = f"{_GATEWAY_BASE_URL}/api/v1/transactions/{transaction_id}/details"
     try:
         response = requests.get(url, timeout=_REQUEST_TIMEOUT)
         if response.status_code == 200:
@@ -106,19 +113,12 @@ def fetch_transaction_logs(transaction_id: str) -> str:
                 f"Unexpected response from the gateway "
                 f"(HTTP {response.status_code}): {response.text[:500]}"
             )
-    except requests.exceptions.ConnectionError:
-        return (
-            f"Could not connect to the payment gateway at {_GATEWAY_BASE_URL}. "
-            "Ensure the FastAPI server is running: `uvicorn main:app --reload`."
-        )
-    except requests.exceptions.Timeout:
-        return (
-            f"The gateway request timed out after {_REQUEST_TIMEOUT} seconds. "
-            "The server may be overloaded — please retry."
-        )
-    except requests.exceptions.RequestException as exc:
+    except requests.exceptions.RequestException:
         logger.exception("Unexpected error in fetch_transaction_logs")
-        return f"An unexpected error occurred while fetching transaction data: {exc}"
+        return (
+            "API_ERROR: The FinTech Gateway is currently offline or unreachable. "
+            "Please inform the merchant that system diagnostics are currently unavailable."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -188,19 +188,12 @@ def retry_failed_webhook(log_id: str) -> str:
                 f"Webhook retry failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
-    except requests.exceptions.ConnectionError:
-        return (
-            f"Could not connect to the payment gateway at {_GATEWAY_BASE_URL}. "
-            "Ensure the FastAPI server is running: `uvicorn main:app --reload`."
-        )
-    except requests.exceptions.Timeout:
-        return (
-            f"The retry request timed out after {_REQUEST_TIMEOUT} seconds. "
-            "Please retry the operation."
-        )
-    except requests.exceptions.RequestException as exc:
+    except requests.exceptions.RequestException:
         logger.exception("Unexpected error in retry_failed_webhook")
-        return f"An unexpected error occurred while retrying the webhook: {exc}"
+        return (
+            "API_ERROR: The FinTech Gateway is currently offline or unreachable. "
+            "Please inform the merchant that system diagnostics are currently unavailable."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -208,8 +201,40 @@ def retry_failed_webhook(log_id: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@tool
-def search_knowledge_base(query: str) -> str:
+class _SearchKBInput(BaseModel):
+    """Input schema for search_knowledge_base with defensive input coercion.
+
+    LLMs occasionally pass raw field dicts (e.g. ``{'decline_code': None}``)
+    instead of a plain string when the transaction has no decline code.  Three
+    layers of defence prevent a ``ValidationError`` from reaching the caller:
+
+    1. ``model_config = ConfigDict(extra='ignore')`` silently drops any
+       unexpected fields (e.g. ``decline_code``).
+    2. ``query`` has a safe default so the field is never "required-but-missing".
+    3. The ``model_validator(mode='before')`` converts a no-``query`` dict
+       into a meaningful string query using whatever non-None values it finds.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    query: str = "general FinTech query"
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_to_query(cls, data: object) -> dict:
+        """Coerce non-string / missing-query inputs into a valid query dict."""
+        if isinstance(data, str):
+            return {"query": data}
+        if isinstance(data, dict) and "query" not in data:
+            # LLM passed raw transaction fields (e.g. {'decline_code': None})
+            # instead of a natural-language question.  Build the best query
+            # we can from non-None values; fall back to a safe default.
+            parts = [f"{k} {v}" for k, v in data.items() if v is not None]
+            return {"query": " ".join(parts) if parts else "general FinTech query"}
+        return data  # type: ignore[return-value]
+
+
+@tool(args_schema=_SearchKBInput)
+def search_knowledge_base(query: str = "general FinTech query") -> str:
     """
     Search the internal FinTech documentation knowledge base for authoritative
     answers on decline codes, webhook integration rules, and payout schedules.
@@ -277,6 +302,144 @@ def search_knowledge_base(query: str) -> str:
         )
 
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tool 4 – Merchant Diagnostics Tool
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@tool
+def fetch_merchant_diagnostics(merchant_id: str) -> str:
+    """
+    Fetch a diagnostic summary of recent transactions and webhook delivery
+    health for a merchant.  Use this tool whenever a merchant identifies
+    themselves by merchant_id and reports a systemic issue such as 'none of
+    my orders are syncing', 'all my payments are failing', or 'I haven't
+    received any webhooks today'.
+
+    The tool fetches the 50 most-recent transactions and webhook logs for the
+    merchant and returns a plain-English diagnostic report covering:
+
+    * Total transactions inspected, with SUCCESS / DECLINED breakdown.
+    * Decline code frequency — how many times each code appeared (useful for
+      spotting patterns like a mass fraud block or issuer outage).
+    * Webhook HTTP status frequency — how many 200, 401, 500, 504, etc.
+      responses were recorded (a mass 401 spike indicates a misconfigured
+      webhook secret; a mass 500 spike indicates server-side failures).
+    * The 5 most-recent webhook log entries with their ``log_id``,
+      ``http_status``, and ``event_type`` — so you can select a ``log_id``
+      to pass to ``retry_failed_webhook`` if remediation is needed.
+
+    Args:
+        merchant_id: The stable merchant identifier to diagnose
+            (e.g. ``merchant_id_2``).
+
+    Returns:
+        A plain-English diagnostic report string, or an error message if the
+        merchant does not exist or the gateway is unreachable.
+    """
+    try:
+        # ── Fetch recent transactions ─────────────────────────────────────
+        txn_response = requests.get(
+            f"{_GATEWAY_BASE_URL}/api/v1/merchants/{merchant_id}/transactions",
+            params={"limit": 50},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if txn_response.status_code == 404:
+            return (
+                f"Merchant '{merchant_id}' was not found in the gateway. "
+                "Please verify the merchant_id and try again."
+            )
+        if txn_response.status_code != 200:
+            return (
+                f"Unexpected response fetching transactions for '{merchant_id}' "
+                f"(HTTP {txn_response.status_code}): {txn_response.text[:300]}"
+            )
+        transactions: list[dict] = txn_response.json()
+
+        # ── Fetch recent webhook logs ─────────────────────────────────────
+        wh_response = requests.get(
+            f"{_GATEWAY_BASE_URL}/api/v1/merchants/{merchant_id}/webhooks",
+            params={"limit": 50},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        webhooks: list[dict] = (
+            wh_response.json() if wh_response.status_code == 200 else []
+        )
+
+        # ── Compute summary statistics ────────────────────────────────────
+        total = len(transactions)
+        success_count = sum(
+            1 for t in transactions if t.get("status") == "SUCCESS"
+        )
+        declined_count = total - success_count
+
+        # Decline code frequency
+        decline_freq: dict[str, int] = {}
+        for t in transactions:
+            code = t.get("decline_code")
+            if code:
+                decline_freq[code] = decline_freq.get(code, 0) + 1
+
+        # Webhook HTTP status frequency
+        wh_status_freq: dict[int, int] = {}
+        for w in webhooks:
+            status = w.get("http_status")
+            if status is not None:
+                wh_status_freq[status] = wh_status_freq.get(status, 0) + 1
+
+        # ── Build plain-English report ────────────────────────────────────
+        lines = [
+            f"Diagnostic report for {merchant_id} "
+            f"(last {total} transactions, last {len(webhooks)} webhook logs):",
+            "",
+            f"Transaction breakdown: {success_count} SUCCESS, "
+            f"{declined_count} DECLINED.",
+        ]
+
+        if decline_freq:
+            lines.append("Decline code frequency:")
+            for code, count in sorted(
+                decline_freq.items(), key=lambda x: -x[1]
+            ):
+                lines.append(f"  • {code}: {count} occurrences")
+        else:
+            lines.append("No decline codes recorded in this window.")
+
+        lines.append("")
+        lines.append("Webhook HTTP status frequency:")
+        if wh_status_freq:
+            for status, count in sorted(
+                wh_status_freq.items(), key=lambda x: -x[1]
+            ):
+                lines.append(f"  • HTTP {status}: {count} deliveries")
+        else:
+            lines.append("  (no webhook logs found)")
+
+        # Most-recent webhook entries (for log_id reference)
+        lines.append("")
+        lines.append("Most-recent webhook log entries (for retry reference):")
+        recent = webhooks[:5]
+        if recent:
+            for w in recent:
+                lines.append(
+                    f"  • log_id={w.get('log_id')}  "
+                    f"http_status={w.get('http_status')}  "
+                    f"event_type={w.get('event_type')}"
+                )
+        else:
+            lines.append("  (none)")
+
+        return "\n".join(lines)
+
+    except requests.exceptions.RequestException:
+        logger.exception("Unexpected error in fetch_merchant_diagnostics")
+        return (
+            "API_ERROR: The FinTech Gateway is currently offline or unreachable. "
+            "Please inform the merchant that system diagnostics are currently unavailable."
+        )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Tool export list
 # ──────────────────────────────────────────────────────────────────────────────
@@ -290,4 +453,5 @@ merchant_support_tools = [
     fetch_transaction_logs,
     retry_failed_webhook,
     search_knowledge_base,
+    fetch_merchant_diagnostics,
 ]

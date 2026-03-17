@@ -230,6 +230,41 @@ class TestGetWebhookLogsForMerchant:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# get_webhook_log_for_transaction
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetWebhookLogForTransaction:
+    def test_found_returns_correct_log(self, loader):
+        result = loader.get_webhook_log_for_transaction("TXN-00000001")
+        assert result is not None
+        assert result["log_id"] == "WH-00000001"
+        assert result["transaction_id"] == "TXN-00000001"
+
+    def test_not_found_returns_none(self, loader):
+        assert loader.get_webhook_log_for_transaction("TXN-MISSING") is None
+
+    def test_returns_correct_fields_for_failed_webhook(self, loader):
+        result = loader.get_webhook_log_for_transaction("TXN-00000002")
+        assert result is not None
+        assert result["http_status"] == 500
+        assert result["event_type"] == "payment.failed"
+
+    def test_empty_dataframe_returns_none(self):
+        loader = DataLoader(
+            merchants_df=pd.DataFrame(),
+            transactions_df=pd.DataFrame(),
+            webhook_logs_df=pd.DataFrame(),
+        )
+        assert loader.get_webhook_log_for_transaction("TXN-00000001") is None
+
+    def test_transaction_with_401_webhook(self, loader):
+        result = loader.get_webhook_log_for_transaction("TXN-00000003")
+        assert result is not None
+        assert result["http_status"] == 401
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # update_webhook_status
 # ──────────────────────────────────────────────────────────────────────────────
 
