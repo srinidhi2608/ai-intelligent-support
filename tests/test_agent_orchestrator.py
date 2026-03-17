@@ -101,6 +101,19 @@ class TestSystemPrompt:
         """Prompt must instruct the agent to synthesise tool observations."""
         assert "synthesise" in SYSTEM_PROMPT or "synthesize" in SYSTEM_PROMPT
 
+    def test_workflow_a_skips_kb_when_decline_code_null(self):
+        """Prompt must explicitly instruct the agent to skip search_knowledge_base
+        when decline_code is null/None (successful transaction)."""
+        prompt_lower = SYSTEM_PROMPT.lower()
+        assert "null" in prompt_lower or "none" in prompt_lower
+        assert "skip" in prompt_lower or "successful" in prompt_lower
+
+    def test_workflow_a_query_must_be_string(self):
+        """Prompt must explicitly state that the query arg must be a plain string."""
+        assert "plain" in SYSTEM_PROMPT.lower() or "string" in SYSTEM_PROMPT.lower()
+        assert "query" in SYSTEM_PROMPT.lower()
+        assert "dict" in SYSTEM_PROMPT.lower() or "None" in SYSTEM_PROMPT
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()

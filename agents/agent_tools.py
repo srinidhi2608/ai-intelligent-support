@@ -33,6 +33,7 @@ from typing import Any
 
 import requests
 from langchain_core.tools import tool
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from rag_setup import get_retriever
 
@@ -214,8 +215,40 @@ def retry_failed_webhook(log_id: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@tool
-def search_knowledge_base(query: str) -> str:
+class _SearchKBInput(BaseModel):
+    """Input schema for search_knowledge_base with defensive input coercion.
+
+    LLMs occasionally pass raw field dicts (e.g. ``{'decline_code': None}``)
+    instead of a plain string when the transaction has no decline code.  Three
+    layers of defence prevent a ``ValidationError`` from reaching the caller:
+
+    1. ``model_config = ConfigDict(extra='ignore')`` silently drops any
+       unexpected fields (e.g. ``decline_code``).
+    2. ``query`` has a safe default so the field is never "required-but-missing".
+    3. The ``model_validator(mode='before')`` converts a no-``query`` dict
+       into a meaningful string query using whatever non-None values it finds.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    query: str = "general FinTech query"
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_to_query(cls, data: object) -> dict:
+        """Coerce non-string / missing-query inputs into a valid query dict."""
+        if isinstance(data, str):
+            return {"query": data}
+        if isinstance(data, dict) and "query" not in data:
+            # LLM passed raw transaction fields (e.g. {'decline_code': None})
+            # instead of a natural-language question.  Build the best query
+            # we can from non-None values; fall back to a safe default.
+            parts = [f"{k} {v}" for k, v in data.items() if v is not None]
+            return {"query": " ".join(parts) if parts else "general FinTech query"}
+        return data  # type: ignore[return-value]
+
+
+@tool(args_schema=_SearchKBInput)
+def search_knowledge_base(query: str = "general FinTech query") -> str:
     """
     Search the internal FinTech documentation knowledge base for authoritative
     answers on decline codes, webhook integration rules, and payout schedules.

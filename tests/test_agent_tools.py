@@ -360,6 +360,38 @@ class TestSearchKnowledgeBase:
             "Why did my transaction fail with code 93?"
         )
 
+    def test_dict_input_missing_query_coerced_to_string(self):
+        """When the LLM passes a dict without a 'query' key the tool must not crash."""
+        mock_retriever = MagicMock()
+        mock_retriever.invoke.return_value = [_make_doc("some KB content")]
+        # Simulates the buggy LLM call: search_knowledge_base({'decline_code': '93'})
+        with patch("agents.agent_tools.get_retriever", return_value=mock_retriever):
+            result = search_knowledge_base.invoke({"decline_code": "93_Risk_Block"})
+        assert isinstance(result, str)
+        # retriever must have received a string (coerced from the dict)
+        called_with = mock_retriever.invoke.call_args[0][0]
+        assert isinstance(called_with, str)
+
+    def test_none_decline_code_dict_does_not_raise(self):
+        """{'decline_code': None} — the exact bug input — must not raise ValidationError."""
+        mock_retriever = MagicMock()
+        mock_retriever.invoke.return_value = []
+        with patch("agents.agent_tools.get_retriever", return_value=mock_retriever):
+            # Must not raise; must return a non-crashing string
+            result = search_knowledge_base.invoke({"decline_code": None})
+        assert isinstance(result, str)
+
+    def test_none_decline_code_dict_falls_back_to_safe_query(self):
+        """When all dict values are None the fallback query keeps the retriever happy."""
+        mock_retriever = MagicMock()
+        mock_retriever.invoke.return_value = []
+        with patch("agents.agent_tools.get_retriever", return_value=mock_retriever):
+            search_knowledge_base.invoke({"decline_code": None})
+        called_with = mock_retriever.invoke.call_args[0][0]
+        # Must be a non-empty string — the safe fallback
+        assert isinstance(called_with, str)
+        assert len(called_with) > 0
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # fetch_merchant_diagnostics
