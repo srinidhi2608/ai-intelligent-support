@@ -113,19 +113,12 @@ def fetch_transaction_logs(transaction_id: str) -> str:
                 f"Unexpected response from the gateway "
                 f"(HTTP {response.status_code}): {response.text[:500]}"
             )
-    except requests.exceptions.ConnectionError:
-        return (
-            f"Could not connect to the payment gateway at {_GATEWAY_BASE_URL}. "
-            "Ensure the FastAPI server is running: `uvicorn main:app --reload`."
-        )
-    except requests.exceptions.Timeout:
-        return (
-            f"The gateway request timed out after {_REQUEST_TIMEOUT} seconds. "
-            "The server may be overloaded — please retry."
-        )
-    except requests.exceptions.RequestException as exc:
+    except requests.exceptions.RequestException:
         logger.exception("Unexpected error in fetch_transaction_logs")
-        return f"An unexpected error occurred while fetching transaction data: {exc}"
+        return (
+            "API_ERROR: The FinTech Gateway is currently offline or unreachable. "
+            "Please inform the merchant that system diagnostics are currently unavailable."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -195,19 +188,12 @@ def retry_failed_webhook(log_id: str) -> str:
                 f"Webhook retry failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
-    except requests.exceptions.ConnectionError:
-        return (
-            f"Could not connect to the payment gateway at {_GATEWAY_BASE_URL}. "
-            "Ensure the FastAPI server is running: `uvicorn main:app --reload`."
-        )
-    except requests.exceptions.Timeout:
-        return (
-            f"The retry request timed out after {_REQUEST_TIMEOUT} seconds. "
-            "Please retry the operation."
-        )
-    except requests.exceptions.RequestException as exc:
+    except requests.exceptions.RequestException:
         logger.exception("Unexpected error in retry_failed_webhook")
-        return f"An unexpected error occurred while retrying the webhook: {exc}"
+        return (
+            "API_ERROR: The FinTech Gateway is currently offline or unreachable. "
+            "Please inform the merchant that system diagnostics are currently unavailable."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -446,21 +432,11 @@ def fetch_merchant_diagnostics(merchant_id: str) -> str:
 
         return "\n".join(lines)
 
-    except requests.exceptions.ConnectionError:
-        return (
-            f"Could not connect to the payment gateway at {_GATEWAY_BASE_URL}. "
-            "Ensure the FastAPI server is running: `uvicorn main:app --reload`."
-        )
-    except requests.exceptions.Timeout:
-        return (
-            f"The gateway request timed out after {_REQUEST_TIMEOUT} seconds. "
-            "The server may be overloaded — please retry."
-        )
-    except requests.exceptions.RequestException as exc:
+    except requests.exceptions.RequestException:
         logger.exception("Unexpected error in fetch_merchant_diagnostics")
         return (
-            f"An unexpected error occurred while fetching merchant diagnostics: "
-            f"{exc}"
+            "API_ERROR: The FinTech Gateway is currently offline or unreachable. "
+            "Please inform the merchant that system diagnostics are currently unavailable."
         )
 
 

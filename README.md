@@ -18,6 +18,7 @@
 8. [API Endpoints](#8-api-endpoints)
 9. [Running Tests](#9-running-tests)
 10. [Generate Synthetic Data](#10-generate-synthetic-data)
+11. [Troubleshooting & Common Errors](#11-troubleshooting--common-errors)
 
 ---
 
@@ -428,3 +429,74 @@ python data/telemetry_generator.py
 See **[`data/DATA_DESCRIPTION.md`](data/DATA_DESCRIPTION.md)** for the
 complete schema, scale statistics, and descriptions of all six injected
 anomalies.
+
+---
+
+## 11. Troubleshooting & Common Errors
+
+### `ConnectionRefusedError: [WinError 10061] No connection could be made`
+
+**Symptom:** The Streamlit chat UI displays an error such as:
+
+```
+⚠️ An unexpected error occurred: API_ERROR: The FinTech Gateway is currently
+offline or unreachable.
+```
+
+or, on Windows, a raw traceback containing `WinError 10061`.
+On macOS / Linux the same issue appears as `ConnectionRefusedError: [Errno 61]`
+(macOS) or `ConnectionRefusedError: [Errno 111]` (Linux).  All three are the
+same root cause.
+
+**Cause:** The LangChain agent attempted to call one of its tools
+(`fetch_transaction_logs`, `retry_failed_webhook`, or `fetch_merchant_diagnostics`),
+but the **FastAPI gateway server is not running**.  Every tool call makes an HTTP
+request to `http://localhost:8000`, so the server must be running before the
+Streamlit UI is used.
+
+**Fix:** Open a new terminal (keep the Streamlit terminal running) and start
+the FastAPI gateway:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+Verify it is healthy by visiting
+[http://localhost:8000/](http://localhost:8000/) — you should see
+`{"status": "ok"}`.
+
+---
+
+### `Input to ChatPromptTemplate is missing variables {"name"}`
+
+**Symptom:** The chat UI shows:
+
+```
+⚠️ An unexpected error occurred: 'Input to ChatPromptTemplate is missing
+variables {"name"}. Expected: ["name", "input"] ...
+```
+
+**Cause:** This error appears when a SYSTEM_PROMPT string contains unescaped
+curly braces (e.g. `{"name": ...}`) that LangChain's template engine
+interprets as template variables.
+
+**Fix:** Ensure all literal curly braces in `SYSTEM_PROMPT` (inside
+`agents/agent_orchestrator.py`) are doubled: `{{` and `}}`.  This is already
+handled in the current codebase; if you customise the prompt, follow the same
+escaping rule.
+
+---
+
+### Knowledge base not initialised
+
+**Symptom:** The agent responds with
+*"The knowledge base has not been initialized yet."*
+
+**Fix:** Run the one-time RAG setup script from the project root:
+
+```bash
+python rag_setup.py
+```
+
+This builds the ChromaDB vector store under `chroma_db/`.  You only need to
+run it once (or again after deleting `chroma_db/`).

@@ -139,14 +139,14 @@ class TestFetchTransactionLogs:
         with patch("agents.agent_tools.requests.get") as mock_get:
             mock_get.side_effect = req_lib.exceptions.Timeout("timed out")
             result = fetch_transaction_logs.invoke({"transaction_id": "TXN-001"})
-        assert "timeout" in result.lower() or "timed out" in result.lower()
+        assert "API_ERROR" in result or "gateway" in result.lower() or "offline" in result.lower()
 
     def test_generic_request_exception_returns_error(self):
         import requests as req_lib
         with patch("agents.agent_tools.requests.get") as mock_get:
             mock_get.side_effect = req_lib.exceptions.RequestException("boom")
             result = fetch_transaction_logs.invoke({"transaction_id": "TXN-001"})
-        assert "unexpected error" in result.lower() or "error" in result.lower()
+        assert "API_ERROR" in result or "error" in result.lower() or "gateway" in result.lower()
 
     def test_returns_string(self):
         with patch("agents.agent_tools.requests.get") as mock_get:
@@ -241,14 +241,14 @@ class TestRetryFailedWebhook:
         with patch("agents.agent_tools.requests.post") as mock_post:
             mock_post.side_effect = req_lib.exceptions.Timeout("timed out")
             result = retry_failed_webhook.invoke({"log_id": "WH-001"})
-        assert "timeout" in result.lower() or "timed out" in result.lower()
+        assert "API_ERROR" in result or "gateway" in result.lower() or "offline" in result.lower()
 
     def test_generic_request_exception_returns_error(self):
         import requests as req_lib
         with patch("agents.agent_tools.requests.post") as mock_post:
             mock_post.side_effect = req_lib.exceptions.RequestException("boom")
             result = retry_failed_webhook.invoke({"log_id": "WH-001"})
-        assert "unexpected error" in result.lower() or "error" in result.lower()
+        assert "API_ERROR" in result or "error" in result.lower() or "gateway" in result.lower()
 
     def test_returns_string(self):
         with patch("agents.agent_tools.requests.post") as mock_post:
@@ -498,7 +498,7 @@ class TestFetchMerchantDiagnostics:
             result = fetch_merchant_diagnostics.invoke(
                 {"merchant_id": "merchant_id_1"}
             )
-        assert "timeout" in result.lower() or "timed out" in result.lower()
+        assert "API_ERROR" in result or "gateway" in result.lower() or "offline" in result.lower()
 
     def test_generic_request_exception_returns_error(self):
         import requests as req_lib
@@ -507,7 +507,7 @@ class TestFetchMerchantDiagnostics:
             result = fetch_merchant_diagnostics.invoke(
                 {"merchant_id": "merchant_id_1"}
             )
-        assert "unexpected error" in result.lower() or "error" in result.lower()
+        assert "API_ERROR" in result or "error" in result.lower() or "gateway" in result.lower()
 
     def test_returns_string(self):
         with patch("agents.agent_tools.requests.get") as mock_get:

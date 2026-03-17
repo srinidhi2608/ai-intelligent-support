@@ -90,7 +90,7 @@ SYSTEM_PROMPT = (
     "tool call directly into your answer.\n\n"
     "NEVER output raw tool-call notation in your final response — that means "
     "you must NEVER write text like "
-    '`{"name": "tool_name", "parameters": {...}}` '
+    '`{{"name": "tool_name", "parameters": {{...}}}}` '
     "anywhere in your reply. Tool invocations happen behind the scenes and "
     "must never appear in the message you send to the user.\n\n"
     "## General Tool-Usage Rules\n\n"
