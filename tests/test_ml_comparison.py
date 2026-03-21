@@ -230,7 +230,7 @@ class TestPredictionMapping:
 # ---------------------------------------------------------------------------
 
 class TestConfusionCounts:
-    """Verify TP, FP, FN counts are computed correctly."""
+    """Verify TP, FP, FN, TN counts are computed correctly."""
 
     def test_tp_count(self):
         y_true = np.array([1, 0, 1, 0, 1])
@@ -250,15 +250,33 @@ class TestConfusionCounts:
         fn = int(((y_pred == 0) & (y_true == 1)).sum())
         assert fn == 1  # index 2
 
+    def test_tn_count(self):
+        y_true = np.array([1, 0, 1, 0, 1])
+        y_pred = np.array([1, 0, 0, 1, 1])
+        tn = int(((y_pred == 0) & (y_true == 0)).sum())
+        assert tn == 1  # index 1
+
     def test_perfect_predictions(self):
         y_true = np.array([1, 0, 1, 0])
         y_pred = np.array([1, 0, 1, 0])
         tp = int(((y_pred == 1) & (y_true == 1)).sum())
         fp = int(((y_pred == 1) & (y_true == 0)).sum())
         fn = int(((y_pred == 0) & (y_true == 1)).sum())
+        tn = int(((y_pred == 0) & (y_true == 0)).sum())
         assert tp == 2
         assert fp == 0
         assert fn == 0
+        assert tn == 2
+
+    def test_counts_sum_to_total(self):
+        """TP + FP + FN + TN should equal the total sample count."""
+        y_true = np.array([1, 0, 1, 0, 1, 0, 0, 1])
+        y_pred = np.array([1, 1, 0, 0, 1, 0, 1, 0])
+        tp = int(((y_pred == 1) & (y_true == 1)).sum())
+        fp = int(((y_pred == 1) & (y_true == 0)).sum())
+        fn = int(((y_pred == 0) & (y_true == 1)).sum())
+        tn = int(((y_pred == 0) & (y_true == 0)).sum())
+        assert tp + fp + fn + tn == len(y_true)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +318,66 @@ class TestMetricsDataFrame:
         df = pd.DataFrame(rows)
         pivot = df.pivot(index="Model", columns="Metric", values="Score")
         assert pivot.shape == (3, 3)
+
+
+# ---------------------------------------------------------------------------
+# Tests – Confusion matrix & outcome labeling (Deep Dive visualisations)
+# ---------------------------------------------------------------------------
+
+class TestConfusionMatrixData:
+    """Verify the confusion matrix data structures used by the heatmap."""
+
+    def test_cm_array_shape(self):
+        """Confusion matrix should be a 2×2 array."""
+        counts = {"TP": 10, "FP": 5, "FN": 3, "TN": 82}
+        cm = np.array([[counts["TN"], counts["FP"]],
+                        [counts["FN"], counts["TP"]]])
+        assert cm.shape == (2, 2)
+
+    def test_cm_values_match_counts(self):
+        counts = {"TP": 10, "FP": 5, "FN": 3, "TN": 82}
+        cm = np.array([[counts["TN"], counts["FP"]],
+                        [counts["FN"], counts["TP"]]])
+        assert cm[0, 0] == 82   # TN (top-left)
+        assert cm[0, 1] == 5    # FP (top-right)
+        assert cm[1, 0] == 3    # FN (bottom-left)
+        assert cm[1, 1] == 10   # TP (bottom-right)
+
+
+class TestOutcomeLabeling:
+    """Verify outcome labeling logic used for the box plot."""
+
+    def test_outcome_labels_assigned_correctly(self):
+        y_true = np.array([1, 0, 1, 0])
+        y_pred = np.array([1, 1, 0, 0])
+        labels = ["TP (True Positive)", "FP (False Positive)",
+                  "FN (False Negative)", "TN (True Negative)"]
+        conditions = [
+            (y_pred == 1) & (y_true == 1),
+            (y_pred == 1) & (y_true == 0),
+            (y_pred == 0) & (y_true == 1),
+            (y_pred == 0) & (y_true == 0),
+        ]
+        outcomes = np.select(conditions, labels, default="TN (True Negative)")
+        assert outcomes[0] == "TP (True Positive)"   # pred=1, true=1
+        assert outcomes[1] == "FP (False Positive)"   # pred=1, true=0
+        assert outcomes[2] == "FN (False Negative)"   # pred=0, true=1
+        assert outcomes[3] == "TN (True Negative)"    # pred=0, true=0
+
+    def test_all_outcomes_present(self):
+        """When all four quadrants have data, all labels are present."""
+        y_true = np.array([1, 0, 1, 0])
+        y_pred = np.array([1, 1, 0, 0])
+        labels = ["TP (True Positive)", "FP (False Positive)",
+                  "FN (False Negative)", "TN (True Negative)"]
+        conditions = [
+            (y_pred == 1) & (y_true == 1),
+            (y_pred == 1) & (y_true == 0),
+            (y_pred == 0) & (y_true == 1),
+            (y_pred == 0) & (y_true == 0),
+        ]
+        outcomes = np.select(conditions, labels, default="TN (True Negative)")
+        assert set(outcomes) == set(labels)
 
 
 # ---------------------------------------------------------------------------

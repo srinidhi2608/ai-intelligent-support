@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import precision_score, recall_score, f1_score
@@ -188,7 +189,8 @@ def train_and_evaluate(
         tp = int(((y_pred == 1) & (y_true == 1)).sum())
         fp = int(((y_pred == 1) & (y_true == 0)).sum())
         fn = int(((y_pred == 0) & (y_true == 1)).sum())
-        confusion_counts[name] = {"TP": tp, "FP": fp, "FN": fn}
+        tn = int(((y_pred == 0) & (y_true == 0)).sum())
+        confusion_counts[name] = {"TP": tp, "FP": fp, "FN": fn, "TN": tn}
 
         rows.append({"Model": name, "Metric": "Precision", "Score": round(prec, 4)})
         rows.append({"Model": name, "Metric": "Recall", "Score": round(rec, 4)})
@@ -283,25 +285,87 @@ selected_model = st.selectbox("Select a model to investigate:", _MODEL_NAMES)
 
 # ── Metric cards ──────────────────────────────────────────────────────────────
 counts = confusion_counts[selected_model]
-col_tp, col_fp, col_fn = st.columns(3)
-col_tp.metric("True Positives (TP)", f"{counts['TP']:,}")
-col_fp.metric("False Positives (FP)", f"{counts['FP']:,}")
-col_fn.metric("False Negatives (FN)", f"{counts['FN']:,}")
+col_tp, col_fp, col_fn, col_tn = st.columns(4)
+col_tp.metric("✅ True Positives (TP)", f"{counts['TP']:,}")
+col_fp.metric("⚠️ False Positives (FP)", f"{counts['FP']:,}")
+col_fn.metric("❌ False Negatives (FN)", f"{counts['FN']:,}")
+col_tn.metric("🟢 True Negatives (TN)", f"{counts['TN']:,}")
 
-# ── Scatter plot: amount vs http_status coloured by prediction ───────────────
-pred_series = pd.Series(predictions[selected_model], index=data.index)
-scatter_df = data[["amount", "http_status"]].copy()
-scatter_df["Prediction"] = pred_series.map({1: "Anomaly", 0: "Normal"})
+# ── Two-column deep-dive charts ──────────────────────────────────────────────
+chart_left, chart_right = st.columns(2)
 
-fig_scatter = px.scatter(
-    scatter_df,
-    x="amount",
-    y="http_status",
-    color="Prediction",
-    color_discrete_map={"Anomaly": "#e74c3c", "Normal": "#2ecc71"},
-    opacity=0.6,
-    title=f"{selected_model} – Predicted Anomalies (Amount vs HTTP Status)",
-    labels={"amount": "Transaction Amount (₹)", "http_status": "HTTP Status Code"},
-)
-fig_scatter.update_layout(**_PLOTLY_LAYOUT)
-st.plotly_chart(fig_scatter, use_container_width=True)
+# ── LEFT: Confusion Matrix Heatmap ───────────────────────────────────────────
+with chart_left:
+    cm_values = np.array(
+        [[counts["TN"], counts["FP"]],
+         [counts["FN"], counts["TP"]]]
+    )
+    cm_text = np.array(
+        [[f"TN\n{counts['TN']:,}", f"FP\n{counts['FP']:,}"],
+         [f"FN\n{counts['FN']:,}", f"TP\n{counts['TP']:,}"]]
+    )
+
+    fig_cm = go.Figure(data=go.Heatmap(
+        z=cm_values,
+        x=["Predicted Normal", "Predicted Anomaly"],
+        y=["Actual Normal", "Actual Anomaly"],
+        text=cm_text,
+        texttemplate="%{text}",
+        textfont=dict(size=16, color="white"),
+        colorscale=[
+            [0.0, "#1a1a2e"],
+            [0.5, "#16213e"],
+            [1.0, "#e74c3c"],
+        ],
+        showscale=False,
+        hovertemplate="Actual: %{y}<br>Predicted: %{x}<br>Count: %{z:,}<extra></extra>",
+    ))
+    fig_cm.update_layout(
+        title=dict(text=f"{selected_model} – Confusion Matrix", font=dict(size=16)),
+        xaxis=dict(title="Predicted Label", side="bottom"),
+        yaxis=dict(title="Actual Label", autorange="reversed"),
+        **_PLOTLY_LAYOUT,
+    )
+    st.plotly_chart(fig_cm, use_container_width=True)
+
+# ── RIGHT: Amount Distribution by Prediction Outcome ─────────────────────────
+with chart_right:
+    pred_series = pd.Series(predictions[selected_model], index=data.index)
+    outcome_df = data[["amount"]].copy()
+    y_true = data["is_anomaly_actual"]
+
+    conditions = [
+        (pred_series == 1) & (y_true == 1),
+        (pred_series == 1) & (y_true == 0),
+        (pred_series == 0) & (y_true == 1),
+        (pred_series == 0) & (y_true == 0),
+    ]
+    labels = ["TP (True Positive)", "FP (False Positive)",
+              "FN (False Negative)", "TN (True Negative)"]
+    outcome_df["Outcome"] = np.select(
+        conditions, labels, default="TN (True Negative)"
+    )
+
+    # Only show categories that have data
+    present = outcome_df["Outcome"].unique().tolist()
+    color_map = {
+        "TP (True Positive)": "#2ecc71",
+        "FP (False Positive)": "#e67e22",
+        "FN (False Negative)": "#e74c3c",
+        "TN (True Negative)": "#3498db",
+    }
+    category_order = [lbl for lbl in labels if lbl in present]
+
+    fig_box = px.box(
+        outcome_df,
+        x="Outcome",
+        y="amount",
+        color="Outcome",
+        color_discrete_map=color_map,
+        category_orders={"Outcome": category_order},
+        title=f"{selected_model} – Amount Distribution by Outcome",
+        labels={"amount": "Transaction Amount (₹)", "Outcome": ""},
+    )
+    fig_box.update_layout(**_PLOTLY_LAYOUT, showlegend=False)
+    fig_box.update_yaxes(type="log", title="Transaction Amount ₹ (log scale)")
+    st.plotly_chart(fig_box, use_container_width=True)
