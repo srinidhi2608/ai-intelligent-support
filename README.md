@@ -143,6 +143,7 @@ ai-intelligent-support/
 │   └── fraud_model.py          # IsolationForest / XGBoost anomaly detection
 ├── tests/                      # Pytest suite (218+ tests, fully offline/mocked)
 ├── app.py                      # Streamlit chat interface (Phase 6 UI)
+├── generate_realistic_data.py  # Realistic data generator (Pareto, MCC amounts, seasonality)
 ├── main.py                     # FastAPI application entry point
 ├── rag_setup.py                # Builds the ChromaDB knowledge base (one-time setup)
 ├── .env.example                # Environment variable template
@@ -417,7 +418,7 @@ anomalies are deliberately injected to give the agent meaningful patterns to
 diagnose.
 
 ```bash
-# Generate the full multimodal telemetry dataset
+# Generate the full multimodal telemetry dataset (~259,800 rows, 24-hour window)
 python data/telemetry_generator.py
 # Output: data/output/merchants.csv, transactions.csv, webhook_logs.csv
 ```
@@ -429,6 +430,27 @@ python data/telemetry_generator.py
 See **[`data/DATA_DESCRIPTION.md`](data/DATA_DESCRIPTION.md)** for the
 complete schema, scale statistics, and descriptions of all six injected
 anomalies.
+
+### Alternative: Statistically Realistic Generator
+
+For a **statistically richer** dataset (~50,000 transactions over a 7-day
+period) with advanced distributional features, use the alternative generator:
+
+```bash
+python generate_realistic_data.py
+# Output: data/output/merchants.csv, transactions.csv, webhook_logs.csv
+```
+
+| Feature | Description |
+|---|---|
+| **Pareto merchant volumes** | Heavy-tail distribution — a few merchants generate the majority of traffic, mimicking real-world payment gateway patterns |
+| **MCC-based amounts** | Each Merchant Category Code has its own Pareto shape and scale parameters (e.g., grocery ₹300–₹2k vs. electronics ₹2k–₹30k). All amounts clipped at ₹50 minimum |
+| **Time-of-day seasonality** | Transaction timestamps follow an hourly weight curve modelling IST business hours (dual peaks at ~10 am–2 pm and ~5 pm–9 pm IST) |
+| **Demo anomalies preserved** | Three critical rows are injected for UI hero-prompt tests: `TXN-00194400` (93_Risk_Block), `TXN-00000004`/`WH-00000004` (dropped webhook), and a 150-row `merchant_id_2` 401-block |
+
+> Both generators output to the same `data/output/` directory and produce
+> CSV files with identical schemas. The `DataLoader`, FastAPI endpoints,
+> and Streamlit UI work with either dataset.
 
 ---
 
