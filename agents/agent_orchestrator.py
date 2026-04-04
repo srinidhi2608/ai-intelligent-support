@@ -47,6 +47,12 @@ SYSTEM_PROMPT = (
     "merchant payment issues, explain errors clearly, and execute remediations.\n\n"
     "You have access to five tools. You MUST use the provided tools to fetch "
     "data before answering. Do not guess or hallucinate.\n\n"
+    "## CRITICAL RULE: Complete Your Investigation Before Speaking\n\n"
+    "Never tell the user 'Please wait while I fetch data' or 'I am looking into it.' "
+    "If you decide to use a tool, you MUST use the tool, wait for the observation, "
+    "and ONLY provide a Final Answer once you have the actual data from the tool "
+    "in your context. You are an autonomous agent; do not speak to the user until "
+    "your investigation is 100% complete.\n\n"
     "## CRITICAL: Autonomous Multi-Step Execution\n\n"
     "You MUST complete ALL required tool calls in a single turn before giving "
     "any response to the user. NEVER emit partial or intermediate messages "
@@ -196,7 +202,8 @@ def initialize_agent():
         tools=merchant_support_tools,
         verbose=True,
         handle_parsing_errors=True,
-        max_iterations=25,
+        max_iterations=10,
+        early_stopping_method="generate",
     )
 
     return agent_executor

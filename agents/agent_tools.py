@@ -320,6 +320,9 @@ def search_knowledge_base(query: str = "general FinTech query") -> str:
     * ``"Why is my webhook returning 401?"``
     * ``"When will T+2 settlement arrive if the settlement date is a holiday?"``
 
+    Use this tool to get the final technical details required to answer the
+    merchant. Once this tool returns data, summarize it for the user immediately.
+
     Args:
         query: A natural-language question about FinTech operations, decline
             codes, webhooks, or payout rules.
@@ -392,6 +395,9 @@ def fetch_merchant_diagnostics(merchant_id: str) -> str:
     Args:
         merchant_id: The stable merchant identifier to diagnose
             (e.g. ``merchant_id_2``).
+
+    Use this tool to get the final technical details required to answer the
+    merchant. Once this tool returns data, summarize it for the user immediately.
 
     Returns:
         A plain-English diagnostic report string, or an error message if the

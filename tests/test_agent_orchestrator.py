@@ -134,6 +134,17 @@ class TestSystemPrompt:
         assert "transaction_id" in SYSTEM_PROMPT
         assert "NEVER pass a dict" in SYSTEM_PROMPT or "plain string" in SYSTEM_PROMPT.lower()
 
+    def test_critical_rule_no_please_wait_phrase(self):
+        """Prompt must explicitly forbid the agent from saying 'Please wait
+        while I fetch data' before completing its tool calls."""
+        assert "Please wait while I fetch data" in SYSTEM_PROMPT
+        assert "100% complete" in SYSTEM_PROMPT
+
+    def test_critical_rule_no_looking_into_it_phrase(self):
+        """Prompt must explicitly forbid 'I am looking into it' as a premature
+        response before tool observations are in context."""
+        assert "I am looking into it" in SYSTEM_PROMPT
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()
@@ -263,4 +274,15 @@ class TestInitializeAgent:
         """AgentExecutor must allow enough iterations for multi-step tool chaining."""
         initialize_agent()
         _, kwargs = mock_executor_cls.call_args
-        assert kwargs.get("max_iterations") == 25
+        assert kwargs.get("max_iterations") == 10
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_agent_executor_early_stopping_method(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """AgentExecutor must use 'generate' early stopping to synthesise a
+        complete response when max_iterations is reached instead of returning
+        an empty or partial answer."""
+        initialize_agent()
+        _, kwargs = mock_executor_cls.call_args
+        assert kwargs.get("early_stopping_method") == "generate"
