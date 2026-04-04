@@ -361,3 +361,152 @@ class TestIsIncompleteResponse:
         """Past-tense 'I checked' is not an announcement of future action."""
         text = "I checked the knowledge base and found that Code 93 means..."
         assert self._fn(text) is False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _extract_decline_code – decline-code extractor
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestExtractDeclineCode:
+    """Test the _extract_decline_code helper in isolation."""
+
+    def _fn(self, text: str):
+        from app import _extract_decline_code
+        return _extract_decline_code(text)
+
+    def test_extracts_93_risk_block_single_quotes(self):
+        text = "declined with a decline code of '93_Risk_Block'."
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_extracts_93_risk_block_double_quotes(self):
+        text = 'declined with a decline code of "93_Risk_Block".'
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_extracts_93_risk_block_no_quotes(self):
+        text = "decline_code: 93_Risk_Block in the transaction."
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_extracts_51_insufficient_funds(self):
+        text = "The error code is '51_Insufficient_Funds'."
+        assert self._fn(text) == "51_Insufficient_Funds"
+
+    def test_extracts_from_full_incomplete_response(self):
+        text = (
+            "Based on the transaction logs, it appears that the payment for "
+            "TXN-00194400 was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I'll check our knowledge base."
+        )
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_returns_none_for_no_decline_code(self):
+        text = "The transaction was successful with no errors."
+        assert self._fn(text) is None
+
+    def test_returns_none_for_empty_string(self):
+        assert self._fn("") is None
+
+    def test_returns_none_for_none_input(self):
+        # noinspection PyTypeChecker
+        assert self._fn(None) is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _auto_repair_incomplete_response – auto-repair logic
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestAutoRepairIncompleteResponse:
+    """Test the _auto_repair_incomplete_response repair strategy."""
+
+    def _fn(self, incomplete_text, user_prompt, agent):
+        from app import _auto_repair_incomplete_response
+        return _auto_repair_incomplete_response(incomplete_text, user_prompt, agent)
+
+    def test_stage1_direct_kb_lookup_when_decline_code_present(self):
+        """When a decline code is found, the function should call
+        search_knowledge_base directly and synthesise a complete response."""
+        incomplete = (
+            "Based on the transaction logs, the payment for TXN-00194400 "
+            "was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I'll check our knowledge base."
+        )
+        mock_agent = MagicMock()
+        kb_answer = (
+            "[Source 1: decline_codes.md]\n"
+            "Code 93 — Risk Block: The acquiring bank has blocked this "
+            "transaction due to suspected fraud or risk-management rules."
+        )
+
+        with patch(
+            "agents.agent_tools.search_knowledge_base"
+        ) as mock_kb:
+            mock_kb.invoke.return_value = kb_answer
+            result = self._fn(incomplete, "What happened to TXN-00194400?", mock_agent)
+
+        # Must contain KB findings
+        assert "93_Risk_Block" in result
+        assert "knowledge base" in result.lower()
+        # Must NOT contain the incomplete phrase
+        assert "I'll check our knowledge base" not in result
+        # Agent should NOT have been retried (deterministic repair succeeded)
+        mock_agent.invoke.assert_not_called()
+
+    def test_stage2_retry_when_no_decline_code(self):
+        """When no decline code can be extracted, the function should
+        retry the agent with reinforced instructions."""
+        incomplete = (
+            "There seems to be an issue. I'll check our knowledge base "
+            "for more information."
+        )
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {
+            "output": "The issue has been fully investigated. No errors found."
+        }
+
+        result = self._fn(incomplete, "What is wrong?", mock_agent)
+
+        # The retry must have been called
+        mock_agent.invoke.assert_called_once()
+        # The retry prompt must contain reinforcement language
+        call_args = mock_agent.invoke.call_args[0][0]
+        assert "CRITICAL INSTRUCTION" in call_args["input"]
+        # Result should be the retry's answer
+        assert "fully investigated" in result
+
+    def test_returns_original_when_both_stages_fail(self):
+        """If both KB lookup and retry fail, return the original text."""
+        incomplete = (
+            "Something went wrong. I'll check our knowledge base."
+        )
+        mock_agent = MagicMock()
+        # Retry also fails
+        mock_agent.invoke.return_value = {
+            "output": "I'll check our knowledge base again."
+        }
+
+        result = self._fn(incomplete, "Help me", mock_agent)
+
+        # Should return the original since everything failed
+        assert result == incomplete
+
+    def test_kb_exception_falls_back_to_retry(self):
+        """If KB lookup throws an exception, fall back to retry."""
+        incomplete = (
+            "The payment was declined with decline code '93_Risk_Block'. "
+            "I'll check our knowledge base."
+        )
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {
+            "output": "Code 93 means risk block. Here is the full explanation."
+        }
+
+        with patch(
+            "agents.agent_tools.search_knowledge_base"
+        ) as mock_kb:
+            mock_kb.invoke.side_effect = Exception("KB unavailable")
+            result = self._fn(incomplete, "What happened?", mock_agent)
+
+        # Should have fallen back to retry
+        mock_agent.invoke.assert_called_once()
+        assert "Code 93 means risk block" in result

@@ -114,6 +114,12 @@ class TestSystemPrompt:
         assert "query" in SYSTEM_PROMPT.lower()
         assert "dict" in SYSTEM_PROMPT.lower() or "None" in SYSTEM_PROMPT
 
+    def test_never_stop_after_fetching_transaction_logs(self):
+        """Prompt must explicitly forbid stopping after fetching transaction logs
+        when a decline code is present."""
+        assert "NEVER STOP AFTER FETCHING" in SYSTEM_PROMPT
+        assert "IMMEDIATELY" in SYSTEM_PROMPT
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()

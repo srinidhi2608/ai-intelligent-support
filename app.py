@@ -23,11 +23,14 @@ Environment variables
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import streamlit as st
 
 from agents.agent_orchestrator import SYSTEM_PROMPT, initialize_agent
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page configuration
@@ -79,14 +82,14 @@ _INCOMPLETE_RESPONSE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Retry instruction appended to the original prompt when the agent produces
-# an incomplete response (e.g. "I'll check our knowledge base" without
-# actually executing the tool call).
-_RETRY_REINFORCEMENT = (
-    "\n\n[IMPORTANT] You MUST execute ALL tool calls and provide "
-    "a COMPLETE answer in a single response. Do NOT say "
-    "'I'll check' or 'Let me look up' — call the tools "
-    "silently and include ALL results in your final answer."
+# Regex to extract a decline code from the agent's incomplete response.
+# Matches patterns like: decline code of '93_Risk_Block', code "51_Insufficient_Funds",
+# decline_code: 93_Risk_Block, error code is '93_Risk_Block', etc.
+_DECLINE_CODE_RE = re.compile(
+    r"""(?:decline[_ ]code|error[_ ]code|code)"""
+    r"""(?:\s*[:,]\s*|\s+(?:of|is|was)\s+|\s+)"""
+    r"""["']?(\d{1,3}[_A-Za-z]\w*)["']?""",
+    re.IGNORECASE,
 )
 
 
@@ -107,6 +110,109 @@ def _is_incomplete_response(text: str) -> bool:
     if not text:
         return False
     return bool(_INCOMPLETE_RESPONSE_RE.search(text))
+
+
+def _extract_decline_code(text: str) -> str | None:
+    """Extract a decline code string from the agent's incomplete response.
+
+    When the agent says something like *"the payment was declined with a
+    decline code of '93_Risk_Block'. I'll check our knowledge base"*, this
+    function extracts ``"93_Risk_Block"`` so we can directly query the
+    knowledge base ourselves.
+
+    Args:
+        text: The incomplete agent response.
+
+    Returns:
+        The extracted decline code string, or ``None`` if none was found.
+    """
+    if not text:
+        return None
+    match = _DECLINE_CODE_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _auto_repair_incomplete_response(
+    incomplete_text: str,
+    user_prompt: str,
+    agent,
+) -> str:
+    """Attempt to complete an investigation the agent left unfinished.
+
+    This function implements a two-stage repair strategy:
+
+    1. **Direct KB lookup** — If a decline code can be extracted from the
+       incomplete response, call ``search_knowledge_base`` directly and
+       synthesise the results into the incomplete text.  This is
+       deterministic and does not rely on the LLM cooperating.
+    2. **Reinforced retry** — If no decline code was found, re-invoke the
+       agent with a strongly-worded instruction appended to the original
+       prompt.
+
+    Args:
+        incomplete_text: The incomplete response from the first invocation.
+        user_prompt: The original user query.
+        agent: The ``AgentExecutor`` instance to use for retries.
+
+    Returns:
+        A repaired (complete) response string, or the best effort if
+        repair also fails.
+    """
+    decline_code = _extract_decline_code(incomplete_text)
+
+    if decline_code:
+        # ── Stage 1: Deterministic KB lookup ─────────────────────────────
+        try:
+            from agents.agent_tools import search_knowledge_base
+
+            kb_result = search_knowledge_base.invoke(
+                {"query": f"What does decline code {decline_code} mean?"}
+            )
+            if kb_result and "not been initialized" not in kb_result:
+                # Remove the trailing "I'll check…" phrase from the original
+                cleaned = _INCOMPLETE_RESPONSE_RE.sub("", incomplete_text).rstrip()
+                # Strip trailing punctuation fragments like ". " left behind
+                cleaned = cleaned.rstrip(" .")
+
+                repaired = (
+                    f"{cleaned}.\n\n"
+                    f"According to our knowledge base, decline code "
+                    f"**{decline_code}** means the following:\n\n"
+                    f"{kb_result}"
+                )
+                return repaired
+        except Exception:
+            logger.debug(
+                "Auto-repair KB lookup failed for decline code %s; "
+                "falling back to retry.",
+                decline_code,
+                exc_info=True,
+            )
+
+    # ── Stage 2: Reinforced retry ────────────────────────────────────────
+    retry_prompt = (
+        f"{user_prompt}\n\n"
+        "[CRITICAL INSTRUCTION] Your previous attempt was INCOMPLETE. "
+        "You MUST call the search_knowledge_base tool to look up ANY "
+        "decline code or error code you find, and you MUST include the "
+        "knowledge base explanation in your final answer. Do NOT say "
+        "'I'll check' or 'Let me look up' — execute ALL tool calls NOW "
+        "and return ONE complete answer."
+    )
+    try:
+        retry_response = agent.invoke({"input": retry_prompt})
+        retry_reply = retry_response.get("output", "")
+        retry_reply = _strip_tool_call_leakage(retry_reply)
+
+        # If the retry ALSO produced an incomplete response, fall back to
+        # deterministic repair using whatever we have.
+        if not _is_incomplete_response(retry_reply) and retry_reply.strip():
+            return retry_reply
+    except Exception:
+        logger.debug("Auto-repair retry failed.", exc_info=True)
+
+    # ── Last resort: return the original incomplete text ──────────────────
+    return incomplete_text
 
 
 def _strip_tool_call_leakage(text: str) -> str:
@@ -259,12 +365,12 @@ if user_prompt:
             assistant_reply = _strip_tool_call_leakage(assistant_reply)
 
             # If the agent stopped mid-investigation (e.g. "I'll check our
-            # knowledge base" without actually calling the tool), retry once
-            # with reinforced instructions appended to the original prompt.
+            # knowledge base" without actually calling the tool), auto-repair
+            # by directly calling the KB tool or retrying with stronger prompt.
             if _is_incomplete_response(assistant_reply):
-                retry_input = user_prompt + _RETRY_REINFORCEMENT
-                response = agent.invoke({"input": retry_input})
-                assistant_reply = response.get("output", "")
+                assistant_reply = _auto_repair_incomplete_response(
+                    assistant_reply, user_prompt, agent
+                )
                 assistant_reply = _strip_tool_call_leakage(assistant_reply)
 
             if not assistant_reply:
