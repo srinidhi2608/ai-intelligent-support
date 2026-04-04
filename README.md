@@ -348,6 +348,12 @@ I am merchant_id_5. My server was down. Did TXN-00000004 go through? If yes, ple
 | 1 | `Hi, my customer's payment for transaction TXN-00194400 failed. What happened, and what does the error mean?` | RAG lookup — agent fetches the transaction (decline code `93_Risk_Block`), then queries the knowledge base to explain the code |
 | 2 | `Hi, I am merchant_id_2. None of my orders are syncing today and I haven't changed any code. What is wrong?` | Systemic diagnosis — agent calls `fetch_merchant_diagnostics`, identifies the 401 spike, queries the KB, and prescribes a fix |
 
+> **Auto-Repair Note:** If the LLM agent produces an incomplete response
+> (e.g. "I'll check our knowledge base" without actually calling the tool),
+> the Streamlit UI automatically detects this pattern, extracts the decline
+> code from the partial response, and directly calls `search_knowledge_base`
+> to complete the investigation — no manual retry needed.
+
 ---
 
 ## 7. Demonstration Guide — Act 2: The Proactive ML Watcher (The Grand Finale)
