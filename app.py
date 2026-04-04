@@ -75,11 +75,16 @@ _AGENT_TOOL_NAMES = frozenset({
 
 # Compiled regex that catches common "I'll check / let me look up" phrases
 # emitted by the LLM as a final answer instead of actually calling the tool.
+# The middle section uses a lazy `[^.!?]{0,80}?` to tolerate extra words like
+# "the definition in our" between the action verb and the target noun (e.g.
+# "I need to look up the definition in our knowledge base" was previously
+# missed because the rigid `(?:\s+(?:the|our|my))?` group only matched a
+# single determiner directly before the target).
 _INCOMPLETE_RESPONSE_RE = re.compile(
     r"(?:I'?ll|I will|I am going to|I'm going to|let me|I need to)\s+"
-    r"(?:check|search|look\s*up|query|consult|retrieve|access|investigate)"
-    r"(?:\s+(?:the|our|my))?\s*"
-    r"(?:knowledge\s*base|KB|database|documentation|tool|system)",
+    r"(?:check|search|look\s*(?:up|into)|query|consult|retrieve|access|investigate|find)"
+    r"[^.!?]{0,80}?"
+    r"\s*(?:knowledge\s*base|KB|database|documentation|tool|system)",
     re.IGNORECASE,
 )
 
@@ -111,6 +116,35 @@ def _is_incomplete_response(text: str) -> bool:
     if not text:
         return False
     return bool(_INCOMPLETE_RESPONSE_RE.search(text))
+
+
+def _has_tool_call_leakage(text: str) -> bool:
+    """Return ``True`` if the raw LLM output contains a leaked tool-call JSON blob.
+
+    Some LLM backends emit their intended tool invocation as plain text in the
+    final answer instead of executing it silently::
+
+        I need to look up the definition in our knowledge base.
+        {"name": "search_knowledge_base", "parameters": {"query": "..."}}
+
+    When this happens the tool is never actually called.  Detecting the leaked
+    blob in the **raw** response (before ``_strip_tool_call_leakage`` removes
+    it) lets the caller trigger ``_auto_repair_incomplete_response`` even when
+    the surrounding prose does not match ``_INCOMPLETE_RESPONSE_RE``.
+
+    Args:
+        text: The raw ``output`` string returned by ``AgentExecutor.invoke()``.
+
+    Returns:
+        ``True`` if a JSON blob whose ``"name"`` key names a known agent tool
+        is found anywhere in *text*.
+    """
+    if not text:
+        return False
+    for tool_name in _AGENT_TOOL_NAMES:
+        if f'"name": "{tool_name}"' in text or f'"name":"{tool_name}"' in text:
+            return True
+    return False
 
 
 def _extract_decline_code(text: str) -> str | None:
@@ -368,16 +402,22 @@ if user_prompt:
             )
 
             # Extract the final output from the response
-            assistant_reply = response.get("output", "")
+            raw_reply = response.get("output", "")
+
+            # If the LLM emitted a tool-call as plain text (leakage), that is
+            # itself proof the response is incomplete — check this BEFORE
+            # stripping so the signal isn't lost.
+            leaked_tool_call = _has_tool_call_leakage(raw_reply)
 
             # Strip any raw tool-call JSON the LLM may have leaked into its
             # final answer (e.g. {"name": "search_knowledge_base", ...}).
-            assistant_reply = _strip_tool_call_leakage(assistant_reply)
+            assistant_reply = _strip_tool_call_leakage(raw_reply)
 
             # If the agent stopped mid-investigation (e.g. "I'll check our
-            # knowledge base" without actually calling the tool), auto-repair
-            # by directly calling the KB tool or retrying with stronger prompt.
-            if _is_incomplete_response(assistant_reply):
+            # knowledge base" without actually calling the tool, or leaked a
+            # tool-call blob as text), auto-repair by directly calling the KB
+            # tool or retrying with stronger prompt.
+            if leaked_tool_call or _is_incomplete_response(assistant_reply):
                 assistant_reply = _auto_repair_incomplete_response(
                     assistant_reply, user_prompt, agent
                 )

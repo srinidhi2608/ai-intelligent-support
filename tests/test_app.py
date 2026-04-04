@@ -339,6 +339,23 @@ class TestIsIncompleteResponse:
         text = "I'm going to check our knowledge base now."
         assert self._fn(text) is True
 
+    def test_detects_i_need_to_look_up_with_extra_words(self):
+        """Regression: LLM phrase 'I need to look up the definition in our
+        knowledge base' was previously missed because the rigid
+        ``(?:\\s+(?:the|our|my))?`` group only matched one determiner word
+        immediately before the target noun, not a multi-word interlude."""
+        text = (
+            "Based on the transaction logs, it appears that the payment for "
+            "TXN-00194400 was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I need to look up the "
+            "definition in our knowledge base."
+        )
+        assert self._fn(text) is True
+
+    def test_detects_i_need_to_look_up_simple(self):
+        text = "I need to look up the knowledge base for this code."
+        assert self._fn(text) is True
+
     # ── Negative cases (should NOT detect as incomplete) ──────────────────
 
     def test_clean_prose_not_flagged(self):
@@ -368,6 +385,70 @@ class TestIsIncompleteResponse:
         """Past-tense 'I checked' is not an announcement of future action."""
         text = "I checked the knowledge base and found that Code 93 means..."
         assert self._fn(text) is False
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _has_tool_call_leakage – raw-output leakage detector
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestHasToolCallLeakage:
+    """Test the _has_tool_call_leakage detector in isolation."""
+
+    def _fn(self, text: str) -> bool:
+        from app import _has_tool_call_leakage
+        return _has_tool_call_leakage(text)
+
+    # ── Positive cases: raw output contains a tool-call JSON blob ─────────
+
+    def test_detects_search_knowledge_base_leak(self):
+        """Raw output that embeds the search_knowledge_base call as text."""
+        text = (
+            'Based on the logs, the decline code is 93_Risk_Block. '
+            'I need to look up the definition in our knowledge base.\n'
+            '{"name": "search_knowledge_base", '
+            '"parameters": {"query": "What does decline code 93_Risk_Block mean?"}}\n'
+        )
+        assert self._fn(text) is True
+
+    def test_detects_fetch_merchant_diagnostics_leak(self):
+        text = (
+            'Let me run diagnostics.\n'
+            '{"name": "fetch_merchant_diagnostics", '
+            '"parameters": {"merchant_id": "merchant_id_2"}}\n'
+        )
+        assert self._fn(text) is True
+
+    def test_detects_name_without_space(self):
+        """Some LLMs omit the space after the colon in JSON."""
+        text = '{"name":"search_knowledge_base","parameters":{"query":"x"}}'
+        assert self._fn(text) is True
+
+    def test_detects_check_ml_system_alerts_leak(self):
+        text = '{"name": "check_ml_system_alerts", "parameters": {"merchant_id": "m"}}'
+        assert self._fn(text) is True
+
+    # ── Negative cases: clean text with no tool-call blobs ───────────────
+
+    def test_clean_prose_not_flagged(self):
+        text = (
+            "The transaction TXN-00194400 was declined due to risk block "
+            "(Code 93). According to our knowledge base, this means the "
+            "acquiring bank blocked the card for fraud risk."
+        )
+        assert self._fn(text) is False
+
+    def test_unknown_tool_name_not_flagged(self):
+        """JSON with a 'name' key that is not a known tool must not be flagged."""
+        text = '{"name": "some_other_function", "parameters": {}}'
+        assert self._fn(text) is False
+
+    def test_empty_string_not_flagged(self):
+        assert self._fn("") is False
+
+    def test_none_like_empty_not_flagged(self):
+        assert self._fn("") is False
 
 
 # ──────────────────────────────────────────────────────────────────────────────

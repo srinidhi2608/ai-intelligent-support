@@ -78,6 +78,7 @@ SYSTEM_PROMPT = (
     "- 'I'll query'\n"
     "- 'To understand what this error means, I'll'\n"
     "- 'I need to check'\n"
+    "- 'I need to look up'\n"
     "- 'Let me consult'\n"
     "If you find yourself about to write ANY of these phrases, STOP and "
     "call the tool instead. Execute the tool call silently, wait for the "
