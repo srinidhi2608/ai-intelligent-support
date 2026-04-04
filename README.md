@@ -124,9 +124,12 @@ the Streamlit chat UI. The LangChain agent autonomously chains tool calls
 **Pipeline 2 (Proactive):** The `ml_advanced_pipeline.py` script ingests
 transaction telemetry, engineers time-series features, and runs an Isolation
 Forest to detect anomalous merchant windows. When an anomaly is confirmed,
-the script **programmatically invokes the same LangChain agent** via
-`trigger_agent_for_anomaly()`, passing a structured system alert. The agent
-then diagnoses the issue without any human intervention.
+the script **saves the alert to `data/ml_active_alerts.csv`** (the shared
+memory bridge) and then **programmatically invokes the same LangChain agent**
+via `trigger_agent_for_anomaly()`, passing a structured system alert. The
+agent then diagnoses the issue without any human intervention. The UI agent
+can also check these alerts using the `check_ml_system_alerts` tool when a
+merchant reports a vague issue.
 
 ---
 
@@ -169,8 +172,9 @@ ai-intelligent-support/
 │
 ├── agents/
 │   ├── agent_orchestrator.py      # LangChain tool-calling agent + get_agent()
-│   ├── agent_tools.py             # 4 tools: fetch_transaction_logs, retry_failed_webhook,
-│   │                              #          search_knowledge_base, fetch_merchant_diagnostics
+│   ├── agent_tools.py             # 5 tools: fetch_transaction_logs, retry_failed_webhook,
+│   │                              #          search_knowledge_base, fetch_merchant_diagnostics,
+│   │                              #          check_ml_system_alerts
 │   ├── support_agent.py           # Conversational support agent
 │   ├── risk_agent.py              # KYB/KYC risk evaluation agent
 │   └── tools.py                   # Lower-level tool helpers
@@ -194,7 +198,7 @@ ai-intelligent-support/
 │   ├── 1_📊_Analytics.py          # Streamlit analytics dashboard
 │   └── 2_🧠_ML_Comparison.py      # ML model comparison dashboard (IF vs. SVM vs. LOF)
 │
-├── tests/                         # Pytest suite (367+ tests, fully offline / mocked)
+├── tests/                         # Pytest suite (446+ tests, fully offline / mocked)
 │
 ├── app.py                         # Streamlit chat interface (Reactive UI)
 ├── ml_advanced_pipeline.py        # ★ Advanced ML Pipeline + Agentic Handoff
@@ -346,7 +350,19 @@ I am merchant_id_5. My server was down. Did TXN-00000004 go through? If yes, ple
 | # | Prompt | Capability Tested |
 |:-:|---|---|
 | 1 | `Hi, my customer's payment for transaction TXN-00194400 failed. What happened, and what does the error mean?` | RAG lookup — agent fetches the transaction (decline code `93_Risk_Block`), then queries the knowledge base to explain the code |
-| 2 | `Hi, I am merchant_id_2. None of my orders are syncing today and I haven't changed any code. What is wrong?` | Systemic diagnosis — agent calls `fetch_merchant_diagnostics`, identifies the 401 spike, queries the KB, and prescribes a fix |
+| 2 | `Hi, I am merchant_id_2. None of my orders are syncing today and I haven't changed any code. What is wrong?` | Systemic diagnosis — agent first checks `check_ml_system_alerts` for proactive ML alerts, then calls `fetch_merchant_diagnostics`, identifies the 401 spike, queries the KB, and prescribes a fix |
+
+### 6.5 — What Makes These Hero Prompts Work
+
+The agent uses **defensive input validation** on all tools to prevent LLM
+parameter confusion. For example, if the LLM accidentally sends a
+`search_knowledge_base`-style query `{'query': '...'}` to
+`fetch_transaction_logs`, the tool's `_FetchTxnInput` schema gracefully
+coerces or rejects the input instead of crashing with a `ValidationError`.
+
+The **StreamlitCallbackHandler** provides real-time visibility into which
+tools the agent is calling (e.g. "Action: check_ml_system_alerts",
+"Action: fetch_transaction_logs") directly in the UI.
 
 > **Auto-Repair Note:** If the LLM agent produces an incomplete response
 > (e.g. "I'll check our knowledge base" without actually calling the tool),
@@ -397,7 +413,11 @@ The Isolation Forest is trained on this data and the script **asserts** that
 
 #### Stage 2: The Agentic Handoff (The Key Innovation)
 
-Immediately after the assertion passes, the script calls:
+Immediately after the assertion passes, the script:
+
+1. **Saves the alert** to `data/ml_active_alerts.csv` — a shared memory bridge
+   that the Streamlit UI agent can query via the `check_ml_system_alerts` tool.
+2. **Triggers the LangChain agent** programmatically:
 
 ```python
 trigger_agent_for_anomaly(merchant_2_row)

@@ -54,7 +54,7 @@ class TestGetAgent:
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_merchant_support_tools(self, mock_llm_cls, mock_create, mock_executor_cls):
-        """All three merchant_support_tools must be passed to AgentExecutor."""
+        """All five merchant_support_tools must be passed to AgentExecutor."""
         mock_executor_cls.return_value = MagicMock(name="agent_executor")
         from app import get_agent
 
@@ -63,7 +63,7 @@ class TestGetAgent:
 
         _, kwargs = mock_executor_cls.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 4
+        assert len(kwargs["tools"]) == 5
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
@@ -182,6 +182,13 @@ class TestStripToolCallLeakage:
     def test_strips_fetch_merchant_diagnostics_blob(self):
         blob = (
             '{"name": "fetch_merchant_diagnostics", '
+            '"parameters": {"merchant_id": "merchant_id_2"}}'
+        )
+        assert self._fn(blob) == ""
+
+    def test_strips_check_ml_system_alerts_blob(self):
+        blob = (
+            '{"name": "check_ml_system_alerts", '
             '"parameters": {"merchant_id": "merchant_id_2"}}'
         )
         assert self._fn(blob) == ""

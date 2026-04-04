@@ -120,6 +120,20 @@ class TestSystemPrompt:
         assert "NEVER STOP AFTER FETCHING" in SYSTEM_PROMPT
         assert "IMMEDIATELY" in SYSTEM_PROMPT
 
+    def test_mentions_check_ml_system_alerts(self):
+        """Prompt must reference the check_ml_system_alerts tool."""
+        assert "check_ml_system_alerts" in SYSTEM_PROMPT
+
+    def test_ml_alerts_workflow_instruction(self):
+        """Prompt must instruct the agent to check ML alerts for vague issues."""
+        assert "Machine Learning" in SYSTEM_PROMPT or "ML Watcher" in SYSTEM_PROMPT
+        assert "proactive" in SYSTEM_PROMPT.lower()
+
+    def test_transaction_id_must_be_string_instruction(self):
+        """Prompt must instruct that transaction_id must be a plain string."""
+        assert "transaction_id" in SYSTEM_PROMPT
+        assert "NEVER pass a dict" in SYSTEM_PROMPT or "plain string" in SYSTEM_PROMPT.lower()
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()
@@ -166,21 +180,21 @@ class TestInitializeAgent:
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_tools_to_agent_executor(self, mock_llm_cls, mock_create, mock_executor_cls):
-        """All four merchant_support_tools must be passed to AgentExecutor."""
+        """All five merchant_support_tools must be passed to AgentExecutor."""
         initialize_agent()
         _, kwargs = mock_executor_cls.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 4
+        assert len(kwargs["tools"]) == 5
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_tools_to_create_tool_calling_agent(self, mock_llm_cls, mock_create, mock_executor_cls):
-        """All four merchant_support_tools must be passed to create_tool_calling_agent."""
+        """All five merchant_support_tools must be passed to create_tool_calling_agent."""
         initialize_agent()
         _, kwargs = mock_create.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 4
+        assert len(kwargs["tools"]) == 5
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")

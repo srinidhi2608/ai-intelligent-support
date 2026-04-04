@@ -70,6 +70,7 @@ _AGENT_TOOL_NAMES = frozenset({
     "retry_failed_webhook",
     "search_knowledge_base",
     "fetch_merchant_diagnostics",
+    "check_ml_system_alerts",
 })
 
 # Compiled regex that catches common "I'll check / let me look up" phrases
@@ -350,12 +351,21 @@ if user_prompt:
     with st.chat_message("user", avatar="👤"):
         st.markdown(user_prompt)
 
-    # ── Invoke the agent, hiding intermediate tool calls in a collapsible
-    #    status widget so only the final answer reaches the main chat flow ──
+    # ── Invoke the agent, showing real-time tool calls via
+    #    StreamlitCallbackHandler for explicit tool visibility ──
+    thought_container = st.container()
     with st.status("🔍 Agent is investigating...", expanded=False) as status:
         try:
+            from langchain_community.callbacks.streamlit import (
+                StreamlitCallbackHandler,
+            )
+
             agent = get_agent()
-            response = agent.invoke({"input": user_prompt})
+            st_callback = StreamlitCallbackHandler(thought_container)
+            response = agent.invoke(
+                {"input": user_prompt},
+                {"callbacks": [st_callback]},
+            )
 
             # Extract the final output from the response
             assistant_reply = response.get("output", "")

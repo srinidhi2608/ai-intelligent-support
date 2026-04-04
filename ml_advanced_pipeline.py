@@ -158,7 +158,9 @@ def detect_anomalies(
 
 def trigger_agent_for_anomaly(anomaly_row) -> None:
     """
-    Trigger the LangChain agent to investigate a detected anomaly.
+    Trigger the LangChain agent to investigate a detected anomaly and
+    persist the alert to a shared CSV file so the Streamlit UI agent can
+    find it later.
 
     Parameters
     ----------
@@ -180,6 +182,33 @@ def trigger_agent_for_anomaly(anomaly_row) -> None:
             "anomaly_row must contain a 'merchant_id' key with a non-empty value."
         )
 
+    # ── Build a description of the anomaly ────────────────────────────────
+    decline_ratio = anomaly_row.get("decline_ratio", 0)
+    decline_count = anomaly_row.get("decline_count", 0)
+    total_txns = anomaly_row.get("total_transactions", 0)
+    avg_amount = anomaly_row.get("avg_amount", 0)
+
+    if decline_ratio > 0.8:
+        description = (
+            f"High volume of failed transactions detected: "
+            f"{decline_count}/{total_txns} declined "
+            f"(ratio: {decline_ratio:.2%}, avg amount: ${avg_amount:.2f})"
+        )
+    elif decline_ratio > 0.5:
+        description = (
+            f"Elevated decline rate: {decline_count}/{total_txns} declined "
+            f"(ratio: {decline_ratio:.2%})"
+        )
+    else:
+        description = (
+            f"Anomalous transaction pattern detected: "
+            f"{total_txns} transactions, {decline_count} declined, "
+            f"avg amount ${avg_amount:.2f}"
+        )
+
+    # ── Save alert to shared CSV file ─────────────────────────────────────
+    _save_ml_alert(merchant_id, description)
+
     alert_message = (
         f"SYSTEM ALERT: The ML Watcher has detected a high volume of "
         f"failed transactions for {merchant_id}. Please investigate the "
@@ -191,6 +220,57 @@ def trigger_agent_for_anomaly(anomaly_row) -> None:
     output = response.get("output", "No response from agent.")
     logger.info("Agent response for %s: %s", merchant_id, output)
     print(output)
+
+
+def _save_ml_alert(merchant_id: str, description: str) -> None:
+    """
+    Append an ML anomaly alert to the shared CSV file.
+
+    Creates the CSV file with headers if it does not already exist.
+
+    Parameters
+    ----------
+    merchant_id:
+        The merchant identifier that triggered the alert.
+    description:
+        A human-readable description of the anomaly.
+    """
+    import os
+    from datetime import datetime, timezone
+
+    alerts_csv = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data",
+        "ml_active_alerts.csv",
+    )
+
+    # Ensure the data directory exists
+    os.makedirs(os.path.dirname(alerts_csv), exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_row = pd.DataFrame(
+        [
+            {
+                "merchant_id": merchant_id,
+                "timestamp": timestamp,
+                "description": description,
+            }
+        ]
+    )
+
+    if os.path.exists(alerts_csv):
+        existing = pd.read_csv(alerts_csv)
+        combined = pd.concat([existing, new_row], ignore_index=True)
+    else:
+        combined = new_row
+
+    combined.to_csv(alerts_csv, index=False)
+    logger.info(
+        "ML alert saved for %s: %s (timestamp: %s)",
+        merchant_id,
+        description,
+        timestamp,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
