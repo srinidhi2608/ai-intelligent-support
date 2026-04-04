@@ -169,6 +169,10 @@ def initialize_agent():
     return agent_executor
 
 
+# Public alias so callers can use either name.
+get_agent = initialize_agent
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Interactive console loop
 # ──────────────────────────────────────────────────────────────────────────────
