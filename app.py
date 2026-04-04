@@ -79,6 +79,16 @@ _INCOMPLETE_RESPONSE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Retry instruction appended to the original prompt when the agent produces
+# an incomplete response (e.g. "I'll check our knowledge base" without
+# actually executing the tool call).
+_RETRY_REINFORCEMENT = (
+    "\n\n[IMPORTANT] You MUST execute ALL tool calls and provide "
+    "a COMPLETE answer in a single response. Do NOT say "
+    "'I'll check' or 'Let me look up' — call the tools "
+    "silently and include ALL results in your final answer."
+)
+
 
 def _is_incomplete_response(text: str) -> bool:
     """Return ``True`` if *text* looks like the agent paused mid-investigation.
@@ -252,13 +262,7 @@ if user_prompt:
             # knowledge base" without actually calling the tool), retry once
             # with reinforced instructions appended to the original prompt.
             if _is_incomplete_response(assistant_reply):
-                retry_input = (
-                    f"{user_prompt}\n\n"
-                    "[IMPORTANT] You MUST execute ALL tool calls and provide "
-                    "a COMPLETE answer in a single response. Do NOT say "
-                    "'I'll check' or 'Let me look up' — call the tools "
-                    "silently and include ALL results in your final answer."
-                )
+                retry_input = user_prompt + _RETRY_REINFORCEMENT
                 response = agent.invoke({"input": retry_input})
                 assistant_reply = response.get("output", "")
                 assistant_reply = _strip_tool_call_leakage(assistant_reply)

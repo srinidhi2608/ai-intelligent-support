@@ -34,7 +34,8 @@ try:
 except ImportError:
     raise ImportError(
         "scikit-learn is required but not installed. "
-        "Run: pip install -r requirements.txt"
+        "Install it with: pip install scikit-learn  "
+        "(or install all project dependencies with: pip install -r requirements.txt)"
     ) from None
 
 from agents.agent_orchestrator import get_agent
