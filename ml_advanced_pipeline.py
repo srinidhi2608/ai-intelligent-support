@@ -148,20 +148,29 @@ def detect_anomalies(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def trigger_agent_for_anomaly(anomaly_row):
+def trigger_agent_for_anomaly(anomaly_row) -> None:
     """
     Trigger the LangChain agent to investigate a detected anomaly.
 
     Parameters
     ----------
     anomaly_row : dict or pd.Series
-        A single row of anomaly data.  Must contain at least a
-        ``merchant_id`` key.  Typically this is a row from the DataFrame
-        returned by :func:`detect_anomalies` where ``prediction == 1``.
+        A single row of anomaly data.  Must contain a ``merchant_id``
+        key.  Typically this is a row from the DataFrame returned by
+        :func:`detect_anomalies` where ``prediction == 1``.
+
+    Raises
+    ------
+    ValueError
+        If *anomaly_row* does not contain a ``merchant_id`` key.
     """
     agent_executor = get_agent()
 
-    merchant_id = anomaly_row.get("merchant_id", "Unknown")
+    merchant_id = anomaly_row.get("merchant_id")
+    if not merchant_id:
+        raise ValueError(
+            "anomaly_row must contain a 'merchant_id' key with a non-empty value."
+        )
 
     alert_message = (
         f"SYSTEM ALERT: The ML Watcher has detected a high volume of "
@@ -172,6 +181,7 @@ def trigger_agent_for_anomaly(anomaly_row):
     response = agent_executor.invoke({"input": alert_message})
 
     output = response.get("output", "No response from agent.")
+    logger.info("Agent response for %s: %s", merchant_id, output)
     print(output)
 
 
