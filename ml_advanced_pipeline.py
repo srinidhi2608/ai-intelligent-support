@@ -28,7 +28,14 @@ import sys
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import IsolationForest
+
+try:
+    from sklearn.ensemble import IsolationForest
+except ImportError:
+    raise ImportError(
+        "scikit-learn is required but not installed. "
+        "Run: pip install -r requirements.txt"
+    ) from None
 
 from agents.agent_orchestrator import get_agent
 

@@ -268,3 +268,96 @@ class TestSystemPromptToolCallRule:
 
         # The specific JSON pattern that leaks must be mentioned
         assert '"name"' in SYSTEM_PROMPT or "name" in SYSTEM_PROMPT
+
+    def test_forbids_ill_check_knowledge_base(self):
+        """SYSTEM_PROMPT must explicitly forbid 'I'll check our knowledge base'."""
+        from agents.agent_orchestrator import SYSTEM_PROMPT
+
+        assert "I'll check our knowledge base" in SYSTEM_PROMPT
+
+    def test_contains_forbidden_intermediate_phrases_section(self):
+        """SYSTEM_PROMPT must contain the FORBIDDEN Intermediate Phrases section."""
+        from agents.agent_orchestrator import SYSTEM_PROMPT
+
+        assert "FORBIDDEN" in SYSTEM_PROMPT
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _is_incomplete_response – incomplete-investigation detector
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestIsIncompleteResponse:
+    """Test the _is_incomplete_response detector in isolation."""
+
+    def _fn(self, text: str) -> bool:
+        from app import _is_incomplete_response
+        return _is_incomplete_response(text)
+
+    # ── Positive cases (should detect as incomplete) ──────────────────────
+
+    def test_detects_ill_check_knowledge_base(self):
+        text = (
+            "Based on the transaction logs, it appears that the payment for "
+            "TXN-00194400 was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I'll check our knowledge base."
+        )
+        assert self._fn(text) is True
+
+    def test_detects_i_will_check_knowledge_base(self):
+        text = "I will check the knowledge base for this decline code."
+        assert self._fn(text) is True
+
+    def test_detects_let_me_search(self):
+        text = "Let me search the knowledge base for decline code 93."
+        assert self._fn(text) is True
+
+    def test_detects_ill_query_the_kb(self):
+        text = "I'll query the knowledge base to find the meaning."
+        assert self._fn(text) is True
+
+    def test_detects_i_need_to_check(self):
+        text = "I need to check our knowledge base for this error code."
+        assert self._fn(text) is True
+
+    def test_detects_let_me_consult(self):
+        text = "Let me consult the documentation for more details."
+        assert self._fn(text) is True
+
+    def test_detects_ill_look_up_the_kb(self):
+        text = "I'll look up the knowledge base for this code."
+        assert self._fn(text) is True
+
+    def test_detects_im_going_to_check(self):
+        text = "I'm going to check our knowledge base now."
+        assert self._fn(text) is True
+
+    # ── Negative cases (should NOT detect as incomplete) ──────────────────
+
+    def test_clean_prose_not_flagged(self):
+        text = (
+            "The transaction TXN-00194400 was declined due to risk block "
+            "(Code 93). According to our knowledge base, this means..."
+        )
+        assert self._fn(text) is False
+
+    def test_complete_answer_not_flagged(self):
+        text = (
+            "The payment for TXN-00194400 was declined with a decline code "
+            "of '93_Risk_Block'. Based on our knowledge base, Code 93 "
+            "indicates a risk block by the acquiring bank."
+        )
+        assert self._fn(text) is False
+
+    def test_empty_string_not_flagged(self):
+        assert self._fn("") is False
+
+    def test_normal_sentence_with_check_not_flagged(self):
+        """A sentence that uses 'check' without the tool-announcement pattern."""
+        text = "Please check your API credentials on the merchant dashboard."
+        assert self._fn(text) is False
+
+    def test_past_tense_checked_not_flagged(self):
+        """Past-tense 'I checked' is not an announcement of future action."""
+        text = "I checked the knowledge base and found that Code 93 means..."
+        assert self._fn(text) is False

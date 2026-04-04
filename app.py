@@ -69,6 +69,35 @@ _AGENT_TOOL_NAMES = frozenset({
     "fetch_merchant_diagnostics",
 })
 
+# Compiled regex that catches common "I'll check / let me look up" phrases
+# emitted by the LLM as a final answer instead of actually calling the tool.
+_INCOMPLETE_RESPONSE_RE = re.compile(
+    r"(?:I'?ll|I will|I am going to|I'm going to|let me|I need to)\s+"
+    r"(?:check|search|look\s*up|query|consult|retrieve|access|investigate)"
+    r"(?:\s+(?:the|our|my))?\s*"
+    r"(?:knowledge\s*base|KB|database|documentation|tool|system)",
+    re.IGNORECASE,
+)
+
+
+def _is_incomplete_response(text: str) -> bool:
+    """Return ``True`` if *text* looks like the agent paused mid-investigation.
+
+    The LLM sometimes emits a text message such as *"To understand what this
+    error means, I'll check our knowledge base."* as its **final** answer
+    instead of actually executing the ``search_knowledge_base`` tool call.
+    This helper detects that pattern so the caller can automatically retry.
+
+    Args:
+        text: The ``output`` string from ``AgentExecutor.invoke()``.
+
+    Returns:
+        ``True`` if the text matches one of the known "I'll check" patterns.
+    """
+    if not text:
+        return False
+    return bool(_INCOMPLETE_RESPONSE_RE.search(text))
+
 
 def _strip_tool_call_leakage(text: str) -> str:
     """Remove raw JSON tool-call objects that the LLM leaked into its reply.
@@ -218,6 +247,21 @@ if user_prompt:
             # Strip any raw tool-call JSON the LLM may have leaked into its
             # final answer (e.g. {"name": "search_knowledge_base", ...}).
             assistant_reply = _strip_tool_call_leakage(assistant_reply)
+
+            # If the agent stopped mid-investigation (e.g. "I'll check our
+            # knowledge base" without actually calling the tool), retry once
+            # with reinforced instructions appended to the original prompt.
+            if _is_incomplete_response(assistant_reply):
+                retry_input = (
+                    f"{user_prompt}\n\n"
+                    "[IMPORTANT] You MUST execute ALL tool calls and provide "
+                    "a COMPLETE answer in a single response. Do NOT say "
+                    "'I'll check' or 'Let me look up' — call the tools "
+                    "silently and include ALL results in your final answer."
+                )
+                response = agent.invoke({"input": retry_input})
+                assistant_reply = response.get("output", "")
+                assistant_reply = _strip_tool_call_leakage(assistant_reply)
 
             if not assistant_reply:
                 assistant_reply = (
