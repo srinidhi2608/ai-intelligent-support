@@ -114,6 +114,37 @@ class TestSystemPrompt:
         assert "query" in SYSTEM_PROMPT.lower()
         assert "dict" in SYSTEM_PROMPT.lower() or "None" in SYSTEM_PROMPT
 
+    def test_never_stop_after_fetching_transaction_logs(self):
+        """Prompt must explicitly forbid stopping after fetching transaction logs
+        when a decline code is present."""
+        assert "NEVER STOP AFTER FETCHING" in SYSTEM_PROMPT
+        assert "IMMEDIATELY" in SYSTEM_PROMPT
+
+    def test_mentions_check_ml_system_alerts(self):
+        """Prompt must reference the check_ml_system_alerts tool."""
+        assert "check_ml_system_alerts" in SYSTEM_PROMPT
+
+    def test_ml_alerts_workflow_instruction(self):
+        """Prompt must instruct the agent to check ML alerts for vague issues."""
+        assert "Machine Learning" in SYSTEM_PROMPT or "ML Watcher" in SYSTEM_PROMPT
+        assert "proactive" in SYSTEM_PROMPT.lower()
+
+    def test_transaction_id_must_be_string_instruction(self):
+        """Prompt must instruct that transaction_id must be a plain string."""
+        assert "transaction_id" in SYSTEM_PROMPT
+        assert "NEVER pass a dict" in SYSTEM_PROMPT or "plain string" in SYSTEM_PROMPT.lower()
+
+    def test_critical_rule_no_please_wait_phrase(self):
+        """Prompt must explicitly forbid the agent from saying 'Please wait
+        while I fetch data' before completing its tool calls."""
+        assert "Please wait while I fetch data" in SYSTEM_PROMPT
+        assert "100% complete" in SYSTEM_PROMPT
+
+    def test_critical_rule_no_looking_into_it_phrase(self):
+        """Prompt must explicitly forbid 'I am looking into it' as a premature
+        response before tool observations are in context."""
+        assert "I am looking into it" in SYSTEM_PROMPT
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # initialize_agent()
@@ -160,21 +191,21 @@ class TestInitializeAgent:
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_tools_to_agent_executor(self, mock_llm_cls, mock_create, mock_executor_cls):
-        """All four merchant_support_tools must be passed to AgentExecutor."""
+        """All five merchant_support_tools must be passed to AgentExecutor."""
         initialize_agent()
         _, kwargs = mock_executor_cls.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 4
+        assert len(kwargs["tools"]) == 5
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_tools_to_create_tool_calling_agent(self, mock_llm_cls, mock_create, mock_executor_cls):
-        """All four merchant_support_tools must be passed to create_tool_calling_agent."""
+        """All five merchant_support_tools must be passed to create_tool_calling_agent."""
         initialize_agent()
         _, kwargs = mock_create.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 4
+        assert len(kwargs["tools"]) == 5
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
@@ -243,4 +274,15 @@ class TestInitializeAgent:
         """AgentExecutor must allow enough iterations for multi-step tool chaining."""
         initialize_agent()
         _, kwargs = mock_executor_cls.call_args
-        assert kwargs.get("max_iterations") == 25
+        assert kwargs.get("max_iterations") == 10
+
+    @patch("agents.agent_orchestrator.AgentExecutor")
+    @patch("agents.agent_orchestrator.create_tool_calling_agent")
+    @patch("agents.agent_orchestrator.ChatOllama")
+    def test_agent_executor_early_stopping_method(self, mock_llm_cls, mock_create, mock_executor_cls):
+        """AgentExecutor must use 'generate' early stopping to synthesise a
+        complete response when max_iterations is reached instead of returning
+        an empty or partial answer."""
+        initialize_agent()
+        _, kwargs = mock_executor_cls.call_args
+        assert kwargs.get("early_stopping_method") == "generate"

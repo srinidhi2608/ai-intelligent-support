@@ -23,11 +23,14 @@ Environment variables
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import streamlit as st
 
 from agents.agent_orchestrator import SYSTEM_PROMPT, initialize_agent
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page configuration
@@ -67,7 +70,184 @@ _AGENT_TOOL_NAMES = frozenset({
     "retry_failed_webhook",
     "search_knowledge_base",
     "fetch_merchant_diagnostics",
+    "check_ml_system_alerts",
 })
+
+# Compiled regex that catches common "I'll check / let me look up" phrases
+# emitted by the LLM as a final answer instead of actually calling the tool.
+# The middle section uses a lazy `[^.!?]{0,80}?` to tolerate extra words like
+# "the definition in our" between the action verb and the target noun (e.g.
+# "I need to look up the definition in our knowledge base" was previously
+# missed because the rigid `(?:\s+(?:the|our|my))?` group only matched a
+# single determiner directly before the target).
+_INCOMPLETE_RESPONSE_RE = re.compile(
+    r"(?:I'?ll|I will|I am going to|I'm going to|let me|I need to)\s+"
+    r"(?:check|search|look\s*(?:up|into)|query|consult|retrieve|access|investigate|find)"
+    r"[^.!?]{0,80}?"
+    r"\s*(?:knowledge\s*base|KB|database|documentation|tool|system)",
+    re.IGNORECASE,
+)
+
+# Regex to extract a decline code from the agent's incomplete response.
+# Matches patterns like: decline code of '93_Risk_Block', code "51_Insufficient_Funds",
+# decline_code: 93_Risk_Block, error code is '93_Risk_Block', etc.
+_DECLINE_CODE_RE = re.compile(
+    r"""(?:decline[_ ]code|error[_ ]code|code)"""
+    r"""(?:\s*[:,]\s*|\s+(?:of|is|was)\s+|\s+)"""
+    r"""["']?(\d{1,3}[_A-Za-z]\w*)["']?""",
+    re.IGNORECASE,
+)
+
+
+def _is_incomplete_response(text: str) -> bool:
+    """Return ``True`` if *text* looks like the agent paused mid-investigation.
+
+    The LLM sometimes emits a text message such as *"To understand what this
+    error means, I'll check our knowledge base."* as its **final** answer
+    instead of actually executing the ``search_knowledge_base`` tool call.
+    This helper detects that pattern so the caller can automatically retry.
+
+    Args:
+        text: The ``output`` string from ``AgentExecutor.invoke()``.
+
+    Returns:
+        ``True`` if the text matches one of the known "I'll check" patterns.
+    """
+    if not text:
+        return False
+    return bool(_INCOMPLETE_RESPONSE_RE.search(text))
+
+
+def _has_tool_call_leakage(text: str) -> bool:
+    """Return ``True`` if the raw LLM output contains a leaked tool-call JSON blob.
+
+    Some LLM backends emit their intended tool invocation as plain text in the
+    final answer instead of executing it silently::
+
+        I need to look up the definition in our knowledge base.
+        {"name": "search_knowledge_base", "parameters": {"query": "..."}}
+
+    When this happens the tool is never actually called.  Detecting the leaked
+    blob in the **raw** response (before ``_strip_tool_call_leakage`` removes
+    it) lets the caller trigger ``_auto_repair_incomplete_response`` even when
+    the surrounding prose does not match ``_INCOMPLETE_RESPONSE_RE``.
+
+    Args:
+        text: The raw ``output`` string returned by ``AgentExecutor.invoke()``.
+
+    Returns:
+        ``True`` if a JSON blob whose ``"name"`` key names a known agent tool
+        is found anywhere in *text*.
+    """
+    if not text:
+        return False
+    for tool_name in _AGENT_TOOL_NAMES:
+        if f'"name": "{tool_name}"' in text or f'"name":"{tool_name}"' in text:
+            return True
+    return False
+
+
+def _extract_decline_code(text: str) -> str | None:
+    """Extract a decline code string from the agent's incomplete response.
+
+    When the agent says something like *"the payment was declined with a
+    decline code of '93_Risk_Block'. I'll check our knowledge base"*, this
+    function extracts ``"93_Risk_Block"`` so we can directly query the
+    knowledge base ourselves.
+
+    Args:
+        text: The incomplete agent response.
+
+    Returns:
+        The extracted decline code string, or ``None`` if none was found.
+    """
+    if not text:
+        return None
+    match = _DECLINE_CODE_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _auto_repair_incomplete_response(
+    incomplete_text: str,
+    user_prompt: str,
+    agent,
+) -> str:
+    """Attempt to complete an investigation the agent left unfinished.
+
+    This function implements a two-stage repair strategy:
+
+    1. **Direct KB lookup** — If a decline code can be extracted from the
+       incomplete response, call ``search_knowledge_base`` directly and
+       synthesise the results into the incomplete text.  This is
+       deterministic and does not rely on the LLM cooperating.
+    2. **Reinforced retry** — If no decline code was found, re-invoke the
+       agent with a strongly-worded instruction appended to the original
+       prompt.
+
+    Args:
+        incomplete_text: The incomplete response from the first invocation.
+        user_prompt: The original user query.
+        agent: The ``AgentExecutor`` instance to use for retries.
+
+    Returns:
+        A repaired (complete) response string, or the best effort if
+        repair also fails.
+    """
+    decline_code = _extract_decline_code(incomplete_text)
+
+    if decline_code:
+        # ── Stage 1: Deterministic KB lookup ─────────────────────────────
+        try:
+            from agents.agent_tools import search_knowledge_base
+
+            kb_result = search_knowledge_base.invoke(
+                {"query": f"What does decline code {decline_code} mean?"}
+            )
+            if kb_result and "not been initialized" not in kb_result:
+                # Remove the trailing "I'll check…" phrase from the original
+                cleaned = _INCOMPLETE_RESPONSE_RE.sub("", incomplete_text).rstrip()
+                # Strip trailing punctuation fragments like ". " left behind
+                cleaned = cleaned.rstrip(" .")
+
+                repaired = (
+                    f"{cleaned}.\n\n"
+                    f"According to our knowledge base, decline code "
+                    f"**{decline_code}** means the following:\n\n"
+                    f"{kb_result}"
+                )
+                return repaired
+        except Exception:
+            logger.debug(
+                "Auto-repair KB lookup failed for decline code %s; "
+                "falling back to retry.",
+                decline_code,
+                exc_info=True,
+            )
+
+    # ── Stage 2: Reinforced retry ────────────────────────────────────────
+    retry_prompt = (
+        f"{user_prompt}\n\n"
+        "[CRITICAL INSTRUCTION] Your previous attempt was INCOMPLETE. "
+        "You MUST call the search_knowledge_base tool to look up ANY "
+        "decline code or error code you find, and you MUST include the "
+        "knowledge base explanation in your final answer. Do NOT say "
+        "'I'll check' or 'Let me look up' — execute ALL tool calls NOW "
+        "and return ONE complete answer."
+    )
+    try:
+        retry_response = agent.invoke({"input": retry_prompt})
+        retry_reply = retry_response.get("output", "")
+        retry_reply = _strip_tool_call_leakage(retry_reply)
+
+        # If the retry ALSO produced an incomplete response, fall back to
+        # deterministic repair using whatever we have.
+        if not _is_incomplete_response(retry_reply) and retry_reply.strip():
+            return retry_reply
+    except Exception:
+        logger.debug("Auto-repair retry failed.", exc_info=True)
+
+    # ── Last resort: return the original incomplete text ──────────────────
+    return incomplete_text
 
 
 def _strip_tool_call_leakage(text: str) -> str:
@@ -205,19 +385,43 @@ if user_prompt:
     with st.chat_message("user", avatar="👤"):
         st.markdown(user_prompt)
 
-    # ── Invoke the agent, hiding intermediate tool calls in a collapsible
-    #    status widget so only the final answer reaches the main chat flow ──
+    # ── Invoke the agent, showing real-time tool calls via
+    #    StreamlitCallbackHandler for explicit tool visibility ──
+    thought_container = st.container()
     with st.status("🔍 Agent is investigating...", expanded=False) as status:
         try:
+            from langchain_community.callbacks.streamlit import (
+                StreamlitCallbackHandler,
+            )
+
             agent = get_agent()
-            response = agent.invoke({"input": user_prompt})
+            st_callback = StreamlitCallbackHandler(thought_container)
+            response = agent.invoke(
+                {"input": user_prompt},
+                {"callbacks": [st_callback]},
+            )
 
             # Extract the final output from the response
-            assistant_reply = response.get("output", "")
+            raw_reply = response.get("output", "")
+
+            # If the LLM emitted a tool-call as plain text (leakage), that is
+            # itself proof the response is incomplete — check this BEFORE
+            # stripping so the signal isn't lost.
+            leaked_tool_call = _has_tool_call_leakage(raw_reply)
 
             # Strip any raw tool-call JSON the LLM may have leaked into its
             # final answer (e.g. {"name": "search_knowledge_base", ...}).
-            assistant_reply = _strip_tool_call_leakage(assistant_reply)
+            assistant_reply = _strip_tool_call_leakage(raw_reply)
+
+            # If the agent stopped mid-investigation (e.g. "I'll check our
+            # knowledge base" without actually calling the tool, or leaked a
+            # tool-call blob as text), auto-repair by directly calling the KB
+            # tool or retrying with stronger prompt.
+            if leaked_tool_call or _is_incomplete_response(assistant_reply):
+                assistant_reply = _auto_repair_incomplete_response(
+                    assistant_reply, user_prompt, agent
+                )
+                assistant_reply = _strip_tool_call_leakage(assistant_reply)
 
             if not assistant_reply:
                 assistant_reply = (

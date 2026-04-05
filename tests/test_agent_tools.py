@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agents.agent_tools import (
+    check_ml_system_alerts,
     fetch_merchant_diagnostics,
     fetch_transaction_logs,
     merchant_support_tools,
@@ -61,7 +62,7 @@ class TestToolMetadata:
             assert t.description and len(t.description) > 20
 
     def test_merchant_support_tools_length(self):
-        assert len(merchant_support_tools) == 4
+        assert len(merchant_support_tools) == 5
 
     def test_merchant_support_tools_order(self):
         names = [t.name for t in merchant_support_tools]
@@ -70,6 +71,7 @@ class TestToolMetadata:
             "retry_failed_webhook",
             "search_knowledge_base",
             "fetch_merchant_diagnostics",
+            "check_ml_system_alerts",
         ]
 
     def test_tools_are_langchain_callable(self):
@@ -531,3 +533,158 @@ class TestFetchMerchantDiagnostics:
             fetch_merchant_diagnostics.invoke({"merchant_id": "merchant_id_2"})
         for call in mock_get.call_args_list:
             assert "timeout" in call[1]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# fetch_transaction_logs – defensive input schema (_FetchTxnInput)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestFetchTxnInputCoercion:
+    """Test the _FetchTxnInput schema that prevents ValidationError crashes."""
+
+    def test_dict_with_query_instead_of_txn_id_does_not_crash(self):
+        """The exact bug input: {'query': 'What does decline code 93 mean?'}
+        must NOT raise ValidationError — it should return a helpful error msg."""
+        result = fetch_transaction_logs.invoke(
+            {"query": "What does decline code 93 mean?"}
+        )
+        assert isinstance(result, str)
+        # Should get "not provided" message since there's no TXN ID in the query
+        assert "No transaction ID" in result or "not found" in result.lower()
+
+    def test_dict_with_query_containing_txn_id_extracts_it(self):
+        """If the wrong dict happens to contain a TXN-... pattern, extract it."""
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.return_value = _mock_response(
+                200, text='{"transaction_id": "TXN-00194400"}'
+            )
+            result = fetch_transaction_logs.invoke(
+                {"query": "Check TXN-00194400 status"}
+            )
+        assert isinstance(result, str)
+        assert "TXN-00194400" in result
+
+    def test_string_input_treated_as_transaction_id(self):
+        """A plain string should be treated as the transaction_id."""
+        with patch("agents.agent_tools.requests.get") as mock_get:
+            mock_get.return_value = _mock_response(
+                200, text='{"transaction_id": "TXN-001"}'
+            )
+            result = fetch_transaction_logs.invoke("TXN-001")
+        assert isinstance(result, str)
+
+    def test_empty_transaction_id_returns_helpful_message(self):
+        """An empty transaction_id should return a clear error, not crash."""
+        result = fetch_transaction_logs.invoke({"transaction_id": ""})
+        assert isinstance(result, str)
+        assert "No transaction ID" in result
+
+    def test_none_values_dict_does_not_crash(self):
+        """{'decline_code': None} — another LLM bug input — must not crash."""
+        result = fetch_transaction_logs.invoke({"decline_code": None})
+        assert isinstance(result, str)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# check_ml_system_alerts
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestCheckMlSystemAlerts:
+    """Test the check_ml_system_alerts tool."""
+
+    def test_tool_has_correct_name(self):
+        assert check_ml_system_alerts.name == "check_ml_system_alerts"
+
+    def test_tool_has_non_empty_description(self):
+        assert check_ml_system_alerts.description
+        assert len(check_ml_system_alerts.description) > 20
+
+    def test_returns_no_alerts_when_file_missing(self):
+        """When ml_active_alerts.csv does not exist, return a clear message."""
+        with patch("agents.agent_tools.os.path.exists", return_value=False):
+            result = check_ml_system_alerts.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "No active ML alerts" in result
+
+    def test_returns_no_alerts_when_csv_empty(self):
+        """When the CSV is empty, return no-alerts message."""
+        import pandas as pd
+
+        with patch("agents.agent_tools.os.path.exists", return_value=True), \
+             patch("agents.agent_tools.pd.read_csv", return_value=pd.DataFrame()):
+            result = check_ml_system_alerts.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "No active ML alerts" in result
+
+    def test_returns_alerts_when_found(self):
+        """When alerts exist for the merchant, return formatted alerts."""
+        import pandas as pd
+
+        df = pd.DataFrame([
+            {
+                "merchant_id": "merchant_id_2",
+                "timestamp": "2026-04-04T10:00:00Z",
+                "description": "High volume of 401 errors",
+            },
+        ])
+        with patch("agents.agent_tools.os.path.exists", return_value=True), \
+             patch("agents.agent_tools.pd.read_csv", return_value=df):
+            result = check_ml_system_alerts.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "ALERT FOUND" in result
+        assert "High volume of 401 errors" in result
+
+    def test_returns_no_alerts_for_different_merchant(self):
+        """Alerts for merchant_id_2 should not appear for merchant_id_5."""
+        import pandas as pd
+
+        df = pd.DataFrame([
+            {
+                "merchant_id": "merchant_id_2",
+                "timestamp": "2026-04-04T10:00:00Z",
+                "description": "High volume of 401 errors",
+            },
+        ])
+        with patch("agents.agent_tools.os.path.exists", return_value=True), \
+             patch("agents.agent_tools.pd.read_csv", return_value=df):
+            result = check_ml_system_alerts.invoke(
+                {"merchant_id": "merchant_id_5"}
+            )
+        assert "No active ML alerts" in result
+
+    def test_handles_multiple_alerts(self):
+        """Multiple alerts for the same merchant should all be returned."""
+        import pandas as pd
+
+        df = pd.DataFrame([
+            {
+                "merchant_id": "merchant_id_2",
+                "timestamp": "2026-04-04T10:00:00Z",
+                "description": "High volume of 401 errors",
+            },
+            {
+                "merchant_id": "merchant_id_2",
+                "timestamp": "2026-04-04T11:00:00Z",
+                "description": "Elevated decline rate",
+            },
+        ])
+        with patch("agents.agent_tools.os.path.exists", return_value=True), \
+             patch("agents.agent_tools.pd.read_csv", return_value=df):
+            result = check_ml_system_alerts.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert result.count("ALERT FOUND") == 2
+
+    def test_handles_read_exception_gracefully(self):
+        """If reading the CSV fails, return an error message, not a crash."""
+        with patch("agents.agent_tools.os.path.exists", return_value=True), \
+             patch("agents.agent_tools.pd.read_csv", side_effect=Exception("corrupt")):
+            result = check_ml_system_alerts.invoke(
+                {"merchant_id": "merchant_id_2"}
+            )
+        assert "error" in result.lower()
