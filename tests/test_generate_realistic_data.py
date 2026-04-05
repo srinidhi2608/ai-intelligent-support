@@ -23,6 +23,9 @@ from generate_realistic_data import (
     NOW,
     TARGET_TRANSACTIONS,
     WINDOW_DAYS,
+    _HOURLY_PROFILE_NAMES,
+    _RANDOM_MERCHANT_FRACTION,
+    _YEARLY_PROFILE_NAMES,
     generate_merchants,
     generate_transactions,
     generate_webhook_logs,
@@ -89,6 +92,65 @@ class TestMerchants:
 
     def test_webhook_urls_are_https(self, merchants):
         assert merchants["webhook_url"].str.startswith("https://").all()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Section 1b – Merchant seasonality profile columns
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestMerchantPatternProfiles:
+    """Verify that generate_merchants() assigns per-merchant seasonality profiles."""
+
+    def test_hourly_profile_column_exists(self, merchants):
+        assert "hourly_profile" in merchants.columns
+
+    def test_yearly_profile_column_exists(self, merchants):
+        assert "yearly_profile" in merchants.columns
+
+    def test_is_random_pattern_column_exists(self, merchants):
+        assert "is_random_pattern" in merchants.columns
+
+    def test_at_least_one_random_merchant(self, merchants):
+        """At least one merchant must be flagged as random-pattern."""
+        assert merchants["is_random_pattern"].any()
+
+    def test_random_merchant_count_within_range(self, merchants):
+        """Number of random-pattern merchants should be close to _RANDOM_MERCHANT_FRACTION."""
+        n_random = merchants["is_random_pattern"].sum()
+        n_total = len(merchants)
+        expected = round(n_total * _RANDOM_MERCHANT_FRACTION)
+        # Allow ±1 due to rounding
+        assert abs(n_random - expected) <= 1, (
+            f"Expected ~{expected} random merchants, got {n_random}"
+        )
+
+    def test_not_all_merchants_are_random(self, merchants):
+        """At least one merchant must have a seasonal pattern."""
+        assert not merchants["is_random_pattern"].all()
+
+    def test_random_merchants_have_random_hourly_profile(self, merchants):
+        """Random-pattern merchants must have hourly_profile == 'random'."""
+        random_rows = merchants[merchants["is_random_pattern"]]
+        assert (random_rows["hourly_profile"] == "random").all()
+
+    def test_random_merchants_have_no_yearly_profile(self, merchants):
+        """Random-pattern merchants must have yearly_profile == 'none'."""
+        random_rows = merchants[merchants["is_random_pattern"]]
+        assert (random_rows["yearly_profile"] == "none").all()
+
+    def test_seasonal_merchants_have_valid_hourly_profiles(self, merchants):
+        """Non-random merchants must have a recognised named hourly profile."""
+        seasonal_rows = merchants[~merchants["is_random_pattern"]]
+        assert seasonal_rows["hourly_profile"].isin(_HOURLY_PROFILE_NAMES).all()
+
+    def test_seasonal_merchants_have_valid_yearly_profiles(self, merchants):
+        """Non-random merchants must have a recognised named yearly profile."""
+        seasonal_rows = merchants[~merchants["is_random_pattern"]]
+        assert seasonal_rows["yearly_profile"].isin(_YEARLY_PROFILE_NAMES).all()
+
+    def test_is_random_pattern_is_boolean(self, merchants):
+        assert merchants["is_random_pattern"].dtype == bool
 
 
 # ──────────────────────────────────────────────────────────────────────────────
