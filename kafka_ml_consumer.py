@@ -106,7 +106,6 @@ def _append_alert(payload: dict, score: float | None) -> None:
 
     row = {
         "detected_at_utc": datetime.now(tz=timezone.utc).isoformat(),
-        "prediction": 1,
         "anomaly_score": score,
         "payload_json": json.dumps(payload, ensure_ascii=False),
     }
@@ -114,7 +113,7 @@ def _append_alert(payload: dict, score: float | None) -> None:
     with ALERTS_PATH.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["detected_at_utc", "prediction", "anomaly_score", "payload_json"],
+            fieldnames=["detected_at_utc", "anomaly_score", "payload_json"],
         )
         if not file_exists:
             writer.writeheader()

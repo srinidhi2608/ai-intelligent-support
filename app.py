@@ -87,7 +87,7 @@ def _get_alert_file_mtime() -> float | None:
 
 
 def _init_realtime_alert_state() -> None:
-    """Initialise session-state keys used by real-time alert notifications."""
+    """Initialize session-state keys used by real-time alert notifications."""
     if "last_alert_mtime" not in st.session_state:
         st.session_state.last_alert_mtime = _get_alert_file_mtime()
     if "show_realtime_alert_banner" not in st.session_state:
@@ -100,8 +100,10 @@ def _detect_new_realtime_alert() -> bool:
     previous_mtime = st.session_state.get("last_alert_mtime")
     st.session_state.last_alert_mtime = current_mtime
 
-    if current_mtime is None or previous_mtime is None:
+    if current_mtime is None:
         return False
+    if previous_mtime is None:
+        return True
     return current_mtime > previous_mtime
 
 
@@ -217,6 +219,9 @@ with st.sidebar:
     st.subheader("📡 Real-Time Watcher")
     st.caption("Polling `data/ml_active_alerts.csv` every 3 seconds.")
     st_autorefresh(interval=3000, key="ml_alert_polling")
+    if st.session_state.get("show_realtime_alert_banner"):
+        if st.button("Dismiss Subbi alert banner"):
+            st.session_state.show_realtime_alert_banner = False
 
 _init_realtime_alert_state()
 if _detect_new_realtime_alert():

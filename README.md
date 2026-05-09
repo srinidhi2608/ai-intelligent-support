@@ -351,6 +351,8 @@ The consumer appends anomaly payloads to:
 data/ml_active_alerts.csv
 ```
 
+Keep **Step 3 (`streamlit run app.py`)** running to see live Subbi notifications.
+
 `app.py` polls this file every 3 seconds and shows:
 `⚠️ Subbi Alert: A real-time anomaly was just detected by the ML Watcher. Ask me to investigate!`
 
