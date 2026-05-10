@@ -191,6 +191,17 @@ ai-intelligent-support/
 │   └── DATA_DESCRIPTION.md        # Schema & injected anomaly descriptions
 │
 ├── models/
+│   └── fraud_model.py          # IsolationForest / XGBoost anomaly detection
+├── tests/                      # Pytest suite (218+ tests, fully offline/mocked)
+├── app.py                      # Streamlit chat interface (Phase 6 UI)
+├── kafka_producer.py           # Mock Gateway stream publisher (Kafka topic: live_transactions)
+├── kafka_ml_consumer.py        # Real-time ML watcher (IsolationForest + alert sink CSV)
+├── docker-compose.kafka.yml    # Local Kafka + Zookeeper stack
+├── generate_realistic_data.py  # Realistic data generator (Pareto, MCC amounts, seasonality)
+├── main.py                     # FastAPI application entry point
+├── rag_setup.py                # Builds the ChromaDB knowledge base (one-time setup)
+├── .env.example                # Environment variable template
+└── requirements.txt            # Python dependencies
 │   ├── ml_watcher.py              # Proactive ML Watcher (Isolation Forest)
 │   └── fraud_model.py             # IsolationForest / XGBoost anomaly detection
 │
@@ -390,6 +401,58 @@ python ml_advanced_pipeline.py
 
 ### 7.2 — What the Script Does (Expected Output for the Panel)
 
+---
+
+### Step 4 (Phase 2) — Start Kafka + Zookeeper via Docker Compose 🧵
+
+Open a new terminal from the project root and start the local stream stack:
+
+```bash
+docker compose -f docker-compose.kafka.yml up -d
+```
+
+Verify containers are healthy:
+
+```bash
+docker compose -f docker-compose.kafka.yml ps
+```
+
+To stop the stack:
+
+```bash
+docker compose -f docker-compose.kafka.yml down
+```
+
+---
+
+### Step 5 (Phase 2) — Run the real-time streaming pipeline ⚡
+
+Use two more terminals:
+
+```bash
+# Terminal A: mock gateway producer (1 payload/sec to Kafka topic live_transactions)
+python kafka_producer.py
+```
+
+```bash
+# Terminal B: ML watcher consumer (writes anomalies only)
+python kafka_ml_consumer.py
+```
+
+The consumer appends anomaly payloads to:
+
+```bash
+data/ml_active_alerts.csv
+```
+
+Keep **Step 3 (`streamlit run app.py`)** running to see live Subbi notifications.
+
+`app.py` polls this file every 3 seconds and shows:
+`⚠️ Subbi Alert: A real-time anomaly was just detected by the ML Watcher. Ask me to investigate!`
+
+---
+
+## 7. How to Test the Agent — Hero Prompts 🧪
 The script executes the following stages, with output printed to the terminal:
 
 #### Stage 1: Automated Edge-Case Tests
@@ -570,6 +633,8 @@ current codebase.
 python rag_setup.py
 ```
 
+This builds the ChromaDB vector store under `chroma_db/`.  You only need to
+run it once (or again after deleting `chroma_db/`).
 ### Model Not Found / Ollama Connection Error
 
 **Fix:** Ensure Ollama is running and the model is pulled:
