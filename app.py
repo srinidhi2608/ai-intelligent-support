@@ -301,6 +301,18 @@ if user_prompt:
                     "Please try rephrasing your question."
                 )
 
+            # ── CRITICAL: persist to session_state BEFORE any Streamlit UI
+            # call.  status.update() is the next st.* call and it is the
+            # point where a pending autorefresh rerun-interrupt (StopException)
+            # fires.  If session_state is written after status.update() the
+            # exception propagates past the append and the reply is silently
+            # discarded — exactly the "chatbot not showing backend response"
+            # bug.  Pure Python dict operations (like list.append) are NOT
+            # Streamlit yield-points and cannot be interrupted.
+            st.session_state.messages.append(
+                {"role": "assistant", "content": assistant_reply}
+            )
+
             status.update(
                 label="✅ Investigation complete",
                 state="complete",
@@ -309,6 +321,9 @@ if user_prompt:
 
         except ValueError as exc:
             assistant_reply = f"⚠️ Configuration error: {exc}"
+            st.session_state.messages.append(
+                {"role": "assistant", "content": assistant_reply}
+            )
             status.update(label="⚠️ Configuration error", state="error")
         except Exception as exc:
             assistant_reply = (
@@ -316,11 +331,19 @@ if user_prompt:
                 "Please ensure the FastAPI gateway is running "
                 "(`uvicorn main:app --reload`) and try again."
             )
+            st.session_state.messages.append(
+                {"role": "assistant", "content": assistant_reply}
+            )
             status.update(label="⚠️ An error occurred", state="error")
 
-    # ── Display and record the assistant response ────────────────────────
-    st.session_state.messages.append(
-        {"role": "assistant", "content": assistant_reply}
-    )
-    with st.chat_message("assistant", avatar="🤖"):
-        st.markdown(assistant_reply)
+    # ── Display the assistant response ───────────────────────────────────
+    # Read from session_state rather than the local variable.  If the
+    # rerun-interrupt fires at status.update() above, this block is
+    # skipped, but the message is already in session_state so the next
+    # Streamlit run renders it via the chat-history loop at the top.
+    if (
+        st.session_state.messages
+        and st.session_state.messages[-1]["role"] == "assistant"
+    ):
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(st.session_state.messages[-1]["content"])
