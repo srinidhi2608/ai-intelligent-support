@@ -18,9 +18,18 @@ Statistical features
   Pareto shape and scale parameters, producing realistic amount ranges
   (e.g., grocery ₹300–₹2k vs. electronics ₹2k–₹30k).  All amounts are
   clipped to a minimum of ₹50 to prevent unrealistic tiny values.
-* **Time-of-day seasonality**: transaction timestamps follow an hourly
-  weight curve modelling IST business hours (dual peaks at ~10 am–2 pm and
-  ~5 pm–9 pm IST), with low activity at night.
+* **Per-merchant intra-day profiles**: each merchant is randomly assigned one
+  of four named hourly traffic patterns (``business_hours``,
+  ``evening_social``, ``early_morning``, ``flat_business``) so that merchants
+  of different business types show different peak-hour behaviour.
+* **Yearly seasonality**: each non-random merchant is assigned a named yearly
+  profile (e.g. ``holiday_retail``, ``summer_travel``, ``festival_india``)
+  whose current-month multiplier scales that merchant's Pareto-assigned
+  transaction volume.  This simulates real-world seasonal demand fluctuations.
+* **Random-pattern merchants**: approximately 20 % of merchants are designated
+  as "random-pattern" — their timestamps are drawn from a uniform distribution
+  with no intra-day or yearly bias at all.  The generator prints which
+  merchants fall into this category.
 
 CRITICAL – Preserved Demo Anomalies
 ------------------------------------
@@ -41,6 +50,7 @@ Run directly::
 from __future__ import annotations
 
 import random
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -108,15 +118,76 @@ _ALL_BINS: list[str] = [
 ]
 _BIN_WEIGHTS: list[float] = [0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.02]
 
-# Hourly traffic weights (UTC hours 0–23).
-# IST = UTC + 5:30 → IST business-hour peaks map to approximately UTC 4–15.
-_HOURLY_WEIGHTS: np.ndarray = np.array([
-    0.30, 0.20, 0.20, 0.40, 0.70,  # UTC 0–4   (IST ~5:30–9:30 am)
-    0.90, 1.00, 1.00, 1.00, 0.90,  # UTC 5–9   (IST ~10:30 am–2:30 pm)
-    0.70, 0.80, 0.90, 1.00, 1.00,  # UTC 10–14 (IST ~3:30–7:30 pm)
-    0.80, 0.60, 0.50, 0.40, 0.30,  # UTC 15–19 (IST ~8:30 pm–12:30 am)
-    0.20, 0.20, 0.20, 0.30,        # UTC 20–23 (IST ~1:30–4:30 am)
-])
+# ── Per-merchant pattern profiles ────────────────────────────────────────────
+
+# Fraction of merchants assigned a purely random (no seasonality) timestamp
+# distribution.  With 25 merchants and 0.20 fraction → ~5 random merchants.
+_RANDOM_MERCHANT_FRACTION: float = 0.20
+
+# Named intra-day (hourly) traffic profiles.  Each is a 24-element NumPy array
+# of relative weights indexed by UTC hour (0 = midnight UTC, ≈ IST 05:30).
+# Weights are normalised inside the sampler so only relative magnitudes matter.
+_HOURLY_PROFILES: dict[str, np.ndarray] = {
+    # Standard IST business-hours dual-peak (original global weights).
+    "business_hours": np.array([
+        0.30, 0.20, 0.20, 0.40, 0.70,  # UTC 0–4   (IST ~5:30–9:30 am)
+        0.90, 1.00, 1.00, 1.00, 0.90,  # UTC 5–9   (IST ~10:30 am–2:30 pm)
+        0.70, 0.80, 0.90, 1.00, 1.00,  # UTC 10–14 (IST ~3:30–7:30 pm)
+        0.80, 0.60, 0.50, 0.40, 0.30,  # UTC 15–19 (IST ~8:30 pm–12:30 am)
+        0.20, 0.20, 0.20, 0.30,        # UTC 20–23 (IST ~1:30–4:30 am)
+    ]),
+    # Evening & social — restaurants, entertainment, ride-sharing.
+    "evening_social": np.array([
+        0.20, 0.10, 0.10, 0.10, 0.20,  # UTC 0–4
+        0.30, 0.40, 0.50, 0.60, 0.70,  # UTC 5–9
+        0.70, 0.80, 0.90, 1.00, 1.00,  # UTC 10–14
+        1.00, 1.00, 0.90, 0.80, 0.70,  # UTC 15–19
+        0.50, 0.40, 0.30, 0.20,        # UTC 20–23
+    ]),
+    # Early-morning — quick commerce, pharmacies, delivery services.
+    "early_morning": np.array([
+        0.80, 0.90, 1.00, 1.00, 0.90,  # UTC 0–4  (IST ~5:30–9:30 am peak)
+        0.70, 0.60, 0.50, 0.40, 0.40,  # UTC 5–9
+        0.40, 0.50, 0.60, 0.60, 0.50,  # UTC 10–14
+        0.40, 0.30, 0.20, 0.20, 0.20,  # UTC 15–19
+        0.30, 0.40, 0.50, 0.70,        # UTC 20–23
+    ]),
+    # Flat daytime — utilities, SaaS subscriptions, B2B invoicing.
+    "flat_business": np.array([
+        0.40, 0.30, 0.30, 0.40, 0.60,  # UTC 0–4
+        0.80, 1.00, 1.00, 0.90, 0.80,  # UTC 5–9
+        0.80, 0.80, 0.80, 0.80, 0.80,  # UTC 10–14
+        0.70, 0.60, 0.50, 0.40, 0.40,  # UTC 15–19
+        0.30, 0.30, 0.30, 0.40,        # UTC 20–23
+    ]),
+}
+_HOURLY_PROFILE_NAMES: list[str] = list(_HOURLY_PROFILES.keys())
+
+# Named yearly (monthly) seasonality profiles.  Each is a 12-element list of
+# relative volume multipliers for months January–December (index 0 = January).
+# The multiplier for the *current* month is applied to the Pareto-assigned
+# weight of each merchant so that seasonal demand is reflected in volumes.
+_YEARLY_PROFILES: dict[str, list[float]] = {
+    # Peak in November–December (Christmas, end-of-year retail shopping).
+    "holiday_retail":  [0.70, 0.60, 0.70, 0.80, 0.80, 0.70,
+                        0.70, 0.80, 0.80, 0.90, 1.20, 1.50],
+    # Peak in June–August (summer travel, tourism, hospitality).
+    "summer_travel":   [0.60, 0.60, 0.70, 0.80, 1.00, 1.20,
+                        1.50, 1.40, 1.00, 0.80, 0.70, 0.70],
+    # Peak in October–November (Diwali, Indian festive shopping surge).
+    "festival_india":  [0.70, 0.70, 0.80, 0.70, 0.70, 0.70,
+                        0.70, 0.80, 0.90, 1.50, 1.20, 1.00],
+    # Flat all year — subscriptions, utilities, recurring payments.
+    "year_round":      [1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+                        1.00, 1.00, 1.00, 1.00, 1.00, 1.00],
+    # Peak in January–February (post-holiday B2B budgets, tax-season spend).
+    "q1_peak":         [1.40, 1.30, 1.10, 0.90, 0.80, 0.70,
+                        0.70, 0.80, 0.90, 1.00, 1.00, 0.90],
+    # Peak in July–August (mid-year sales, monsoon shopping surge).
+    "q3_peak":         [0.80, 0.80, 0.90, 1.00, 1.10, 1.20,
+                        1.40, 1.30, 1.10, 0.90, 0.80, 0.80],
+}
+_YEARLY_PROFILE_NAMES: list[str] = list(_YEARLY_PROFILES.keys())
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -126,22 +197,40 @@ def _merchant_id(i: int) -> str:
     return f"merchant_id_{i}"
 
 
-def _sample_seasonal_timestamps(n: int) -> list[datetime]:
-    """Return *n* timestamps sampled from the 7-day window with hourly seasonality."""
-    total_hours = WINDOW_DAYS * 24  # 168
+def _sample_timestamps_for_merchant(n: int, hourly_profile: str) -> list[datetime]:
+    """Return *n* timestamps for a merchant according to its hourly traffic profile.
 
-    # Tile the 24-hour weight pattern across all days, then normalise
-    hour_probs = np.tile(_HOURLY_WEIGHTS, WINDOW_DAYS)
+    For ``hourly_profile == "random"`` timestamps are drawn uniformly over the
+    full 7-day window (no intra-day or day-of-week bias).  For any named
+    profile, the corresponding 24-element weight array is tiled across all days
+    and used to bias sampling toward that merchant's peak hours.
+
+    Args:
+        n: Number of timestamps to generate.
+        hourly_profile: Key in ``_HOURLY_PROFILES``, or the sentinel ``"random"``.
+
+    Returns:
+        A sorted list of timezone-aware :class:`datetime` objects.
+    """
+    if n == 0:
+        return []
+
+    if hourly_profile == "random":
+        # Uniform draw over the entire window at one-second resolution.
+        total_seconds = WINDOW_DAYS * 24 * 3600
+        offsets = _rng.integers(0, total_seconds, size=n)
+        return sorted(WINDOW_START + timedelta(seconds=int(s)) for s in offsets)
+
+    weights = _HOURLY_PROFILES[hourly_profile]
+    total_hours = WINDOW_DAYS * 24
+    hour_probs = np.tile(weights, WINDOW_DAYS)
     hour_probs = hour_probs / hour_probs.sum()
-
     sampled_hours = _rng.choice(total_hours, size=n, p=hour_probs)
     second_offsets = _rng.integers(0, 3600, size=n)
-
-    timestamps = [
+    return sorted(
         WINDOW_START + timedelta(hours=int(h), seconds=int(s))
         for h, s in zip(sampled_hours, second_offsets)
-    ]
-    return sorted(timestamps)
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -150,9 +239,16 @@ def _sample_seasonal_timestamps(n: int) -> list[datetime]:
 
 def generate_merchants(n: int = NUM_MERCHANTS) -> pd.DataFrame:
     """
-    Generate *n* unique merchant profiles.
+    Generate *n* unique merchant profiles with randomly assigned seasonality.
 
-    Columns: merchant_id, business_name, mcc_code, webhook_url
+    Each merchant receives an intra-day hourly traffic profile, a yearly
+    seasonality profile, and an ``is_random_pattern`` flag.  Approximately
+    ``_RANDOM_MERCHANT_FRACTION`` of merchants are flagged as random-pattern,
+    meaning their transaction timestamps are drawn from a uniform distribution
+    with no intra-day or yearly bias.
+
+    Columns: merchant_id, business_name, mcc_code, webhook_url,
+             hourly_profile, yearly_profile, is_random_pattern
     """
     records = [
         {
@@ -163,7 +259,29 @@ def generate_merchants(n: int = NUM_MERCHANTS) -> pd.DataFrame:
         }
         for i in range(1, n + 1)
     ]
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+
+    # ── Seasonality profile assignment ─────────────────────────────────────
+    n_random = max(1, round(n * _RANDOM_MERCHANT_FRACTION))
+    random_idxs = set(_rng.choice(n, size=n_random, replace=False).tolist())
+
+    hourly_cols: list[str] = []
+    yearly_cols: list[str] = []
+    is_random_cols: list[bool] = []
+    for i in range(n):
+        if i in random_idxs:
+            hourly_cols.append("random")
+            yearly_cols.append("none")
+            is_random_cols.append(True)
+        else:
+            hourly_cols.append(random.choice(_HOURLY_PROFILE_NAMES))
+            yearly_cols.append(random.choice(_YEARLY_PROFILE_NAMES))
+            is_random_cols.append(False)
+
+    df["hourly_profile"] = hourly_cols
+    df["yearly_profile"] = yearly_cols
+    df["is_random_pattern"] = is_random_cols
+    return df
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -172,8 +290,18 @@ def generate_merchants(n: int = NUM_MERCHANTS) -> pd.DataFrame:
 
 def generate_transactions(merchants_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Generate ~50,000 transactions with Pareto merchant volumes,
-    MCC-based Pareto amounts, and time-of-day seasonality.
+    Generate ~50,000 transactions with:
+
+    * Pareto merchant volumes adjusted by each merchant's yearly seasonality
+      multiplier for the current calendar month.
+    * Per-merchant intra-day timestamp distributions: each merchant uses its
+      assigned ``hourly_profile`` (or a uniform distribution for
+      random-pattern merchants).
+    * MCC-based Pareto amounts.
+    * ~15 % decline rate.
+
+    Requires *merchants_df* to carry the ``hourly_profile``, ``yearly_profile``,
+    and ``is_random_pattern`` columns produced by :func:`generate_merchants`.
 
     Columns: transaction_id, merchant_id, timestamp, amount, currency,
              status, decline_code, card_bin
@@ -181,16 +309,42 @@ def generate_transactions(merchants_df: pd.DataFrame) -> pd.DataFrame:
     merchant_ids = merchants_df["merchant_id"].tolist()
     n_merchants = len(merchant_ids)
     mcc_lookup = dict(zip(merchants_df["merchant_id"], merchants_df["mcc_code"]))
+    hourly_profile_lookup = dict(
+        zip(merchants_df["merchant_id"], merchants_df["hourly_profile"])
+    )
+    yearly_profile_lookup = dict(
+        zip(merchants_df["merchant_id"], merchants_df["yearly_profile"])
+    )
 
-    # ── Pareto-based merchant assignment ──────────────────────────────────
+    # ── Yearly seasonality multiplier for the current calendar month ──────
+    current_month_idx = NOW.month - 1  # 0-based index into the 12-element list
+    yearly_multipliers = np.array([
+        _YEARLY_PROFILES[yearly_profile_lookup[m]][current_month_idx]
+        if yearly_profile_lookup[m] != "none"
+        else 1.0
+        for m in merchant_ids
+    ])
+
+    # ── Pareto-based merchant assignment (volume weighted by yearly season) ─
     pareto_raw = _rng.pareto(a=1.16, size=n_merchants) + 1.0
-    pareto_probs = pareto_raw / pareto_raw.sum()
+    pareto_weights = pareto_raw * yearly_multipliers
+    pareto_probs = pareto_weights / pareto_weights.sum()
     merchant_assignments = _rng.choice(
         merchant_ids, size=TARGET_TRANSACTIONS, p=pareto_probs,
     )
 
-    # ── Seasonal timestamps ───────────────────────────────────────────────
-    timestamps = _sample_seasonal_timestamps(TARGET_TRANSACTIONS)
+    # ── Per-merchant timestamp generation ─────────────────────────────────
+    per_merchant_counts = Counter(merchant_assignments.tolist())
+    per_merchant_timestamps: dict[str, list] = {
+        mid: _sample_timestamps_for_merchant(cnt, hourly_profile_lookup[mid])
+        for mid, cnt in per_merchant_counts.items()
+    }
+    per_merchant_cursor: dict[str, int] = {mid: 0 for mid in per_merchant_counts}
+    timestamps = []
+    for mid in merchant_assignments:
+        pos = per_merchant_cursor[mid]
+        timestamps.append(per_merchant_timestamps[mid][pos])
+        per_merchant_cursor[mid] = pos + 1
 
     # ── MCC-based Pareto amounts (vectorised per MCC) ─────────────────────
     amounts = np.empty(TARGET_TRANSACTIONS)
@@ -403,6 +557,15 @@ def main(output_dir: str | Path = Path(__file__).parent / "data" / "output") -> 
     print("Generating merchants …")
     merchants_df = generate_merchants()
 
+    # ── Report random-pattern merchants ────────────────────────────────────
+    random_merchants = merchants_df[merchants_df["is_random_pattern"]]
+    print(
+        f"  ↳ {len(random_merchants)} of {len(merchants_df)} merchants have a "
+        f"RANDOM PATTERN (uniform timestamps, no seasonality):"
+    )
+    for _, row in random_merchants.iterrows():
+        print(f"      • {row['merchant_id']}  —  {row['business_name']}")
+
     print(f"Generating transactions (~{TARGET_TRANSACTIONS:,} rows) …")
     transactions_df = generate_transactions(merchants_df)
 
@@ -453,6 +616,18 @@ def main(output_dir: str | Path = Path(__file__).parent / "data" / "output") -> 
         "\n  Note: when loading transactions.csv, use "
         "read_transactions_csv() to preserve card_bin as str."
     )
+
+    # ── Per-merchant seasonality profile table ──────────────────────────────
+    print("\n── Merchant Seasonality Profiles ───────────────────────────────────────")
+    header = f"  {'Merchant':<20} {'Hourly Profile':<18} {'Yearly Profile':<18} Pattern"
+    print(header)
+    print(f"  {'-'*20} {'-'*18} {'-'*18} {'-'*19}")
+    for _, row in merchants_df.sort_values("merchant_id").iterrows():
+        pattern_label = "★ RANDOM (no pattern)" if row["is_random_pattern"] else "seasonal"
+        print(
+            f"  {row['merchant_id']:<20} {row['hourly_profile']:<18} "
+            f"{row['yearly_profile']:<18} {pattern_label}"
+        )
 
 
 if __name__ == "__main__":

@@ -54,7 +54,7 @@ class TestGetAgent:
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
     @patch("agents.agent_orchestrator.ChatOllama")
     def test_passes_merchant_support_tools(self, mock_llm_cls, mock_create, mock_executor_cls):
-        """All three merchant_support_tools must be passed to AgentExecutor."""
+        """All five merchant_support_tools must be passed to AgentExecutor."""
         mock_executor_cls.return_value = MagicMock(name="agent_executor")
         from app import get_agent
 
@@ -63,7 +63,7 @@ class TestGetAgent:
 
         _, kwargs = mock_executor_cls.call_args
         assert "tools" in kwargs
-        assert len(kwargs["tools"]) == 4
+        assert len(kwargs["tools"]) == 5
 
     @patch("agents.agent_orchestrator.AgentExecutor")
     @patch("agents.agent_orchestrator.create_tool_calling_agent")
@@ -186,6 +186,13 @@ class TestStripToolCallLeakage:
         )
         assert self._fn(blob) == ""
 
+    def test_strips_check_ml_system_alerts_blob(self):
+        blob = (
+            '{"name": "check_ml_system_alerts", '
+            '"parameters": {"merchant_id": "merchant_id_2"}}'
+        )
+        assert self._fn(blob) == ""
+
     # ── Prose + blob combinations ─────────────────────────────────────────
 
     def test_strips_blob_preserves_preceding_text(self):
@@ -268,3 +275,326 @@ class TestSystemPromptToolCallRule:
 
         # The specific JSON pattern that leaks must be mentioned
         assert '"name"' in SYSTEM_PROMPT or "name" in SYSTEM_PROMPT
+
+    def test_forbids_ill_check_knowledge_base(self):
+        """SYSTEM_PROMPT must explicitly forbid 'I'll check our knowledge base'."""
+        from agents.agent_orchestrator import SYSTEM_PROMPT
+
+        assert "I'll check our knowledge base" in SYSTEM_PROMPT
+
+    def test_contains_forbidden_intermediate_phrases_section(self):
+        """SYSTEM_PROMPT must contain the FORBIDDEN Intermediate Phrases section."""
+        from agents.agent_orchestrator import SYSTEM_PROMPT
+
+        assert "FORBIDDEN" in SYSTEM_PROMPT
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _is_incomplete_response – incomplete-investigation detector
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestIsIncompleteResponse:
+    """Test the _is_incomplete_response detector in isolation."""
+
+    def _fn(self, text: str) -> bool:
+        from app import _is_incomplete_response
+        return _is_incomplete_response(text)
+
+    # ── Positive cases (should detect as incomplete) ──────────────────────
+
+    def test_detects_ill_check_knowledge_base(self):
+        text = (
+            "Based on the transaction logs, it appears that the payment for "
+            "TXN-00194400 was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I'll check our knowledge base."
+        )
+        assert self._fn(text) is True
+
+    def test_detects_i_will_check_knowledge_base(self):
+        text = "I will check the knowledge base for this decline code."
+        assert self._fn(text) is True
+
+    def test_detects_let_me_search(self):
+        text = "Let me search the knowledge base for decline code 93."
+        assert self._fn(text) is True
+
+    def test_detects_ill_query_the_kb(self):
+        text = "I'll query the knowledge base to find the meaning."
+        assert self._fn(text) is True
+
+    def test_detects_i_need_to_check(self):
+        text = "I need to check our knowledge base for this error code."
+        assert self._fn(text) is True
+
+    def test_detects_let_me_consult(self):
+        text = "Let me consult the documentation for more details."
+        assert self._fn(text) is True
+
+    def test_detects_ill_look_up_the_kb(self):
+        text = "I'll look up the knowledge base for this code."
+        assert self._fn(text) is True
+
+    def test_detects_im_going_to_check(self):
+        text = "I'm going to check our knowledge base now."
+        assert self._fn(text) is True
+
+    def test_detects_i_need_to_look_up_with_extra_words(self):
+        """Regression: LLM phrase 'I need to look up the definition in our
+        knowledge base' was previously missed because the rigid
+        ``(?:\\s+(?:the|our|my))?`` group only matched one determiner word
+        immediately before the target noun, not a multi-word interlude."""
+        text = (
+            "Based on the transaction logs, it appears that the payment for "
+            "TXN-00194400 was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I need to look up the "
+            "definition in our knowledge base."
+        )
+        assert self._fn(text) is True
+
+    def test_detects_i_need_to_look_up_simple(self):
+        text = "I need to look up the knowledge base for this code."
+        assert self._fn(text) is True
+
+    # ── Negative cases (should NOT detect as incomplete) ──────────────────
+
+    def test_clean_prose_not_flagged(self):
+        text = (
+            "The transaction TXN-00194400 was declined due to risk block "
+            "(Code 93). According to our knowledge base, this means..."
+        )
+        assert self._fn(text) is False
+
+    def test_complete_answer_not_flagged(self):
+        text = (
+            "The payment for TXN-00194400 was declined with a decline code "
+            "of '93_Risk_Block'. Based on our knowledge base, Code 93 "
+            "indicates a risk block by the acquiring bank."
+        )
+        assert self._fn(text) is False
+
+    def test_empty_string_not_flagged(self):
+        assert self._fn("") is False
+
+    def test_normal_sentence_with_check_not_flagged(self):
+        """A sentence that uses 'check' without the tool-announcement pattern."""
+        text = "Please check your API credentials on the merchant dashboard."
+        assert self._fn(text) is False
+
+    def test_past_tense_checked_not_flagged(self):
+        """Past-tense 'I checked' is not an announcement of future action."""
+        text = "I checked the knowledge base and found that Code 93 means..."
+        assert self._fn(text) is False
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _has_tool_call_leakage – raw-output leakage detector
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestHasToolCallLeakage:
+    """Test the _has_tool_call_leakage detector in isolation."""
+
+    def _fn(self, text: str) -> bool:
+        from app import _has_tool_call_leakage
+        return _has_tool_call_leakage(text)
+
+    # ── Positive cases: raw output contains a tool-call JSON blob ─────────
+
+    def test_detects_search_knowledge_base_leak(self):
+        """Raw output that embeds the search_knowledge_base call as text."""
+        text = (
+            'Based on the logs, the decline code is 93_Risk_Block. '
+            'I need to look up the definition in our knowledge base.\n'
+            '{"name": "search_knowledge_base", '
+            '"parameters": {"query": "What does decline code 93_Risk_Block mean?"}}\n'
+        )
+        assert self._fn(text) is True
+
+    def test_detects_fetch_merchant_diagnostics_leak(self):
+        text = (
+            'Let me run diagnostics.\n'
+            '{"name": "fetch_merchant_diagnostics", '
+            '"parameters": {"merchant_id": "merchant_id_2"}}\n'
+        )
+        assert self._fn(text) is True
+
+    def test_detects_name_without_space(self):
+        """Some LLMs omit the space after the colon in JSON."""
+        text = '{"name":"search_knowledge_base","parameters":{"query":"x"}}'
+        assert self._fn(text) is True
+
+    def test_detects_check_ml_system_alerts_leak(self):
+        text = '{"name": "check_ml_system_alerts", "parameters": {"merchant_id": "m"}}'
+        assert self._fn(text) is True
+
+    # ── Negative cases: clean text with no tool-call blobs ───────────────
+
+    def test_clean_prose_not_flagged(self):
+        text = (
+            "The transaction TXN-00194400 was declined due to risk block "
+            "(Code 93). According to our knowledge base, this means the "
+            "acquiring bank blocked the card for fraud risk."
+        )
+        assert self._fn(text) is False
+
+    def test_unknown_tool_name_not_flagged(self):
+        """JSON with a 'name' key that is not a known tool must not be flagged."""
+        text = '{"name": "some_other_function", "parameters": {}}'
+        assert self._fn(text) is False
+
+    def test_empty_string_not_flagged(self):
+        assert self._fn("") is False
+
+    def test_none_like_empty_not_flagged(self):
+        assert self._fn("") is False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _extract_decline_code – decline-code extractor
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestExtractDeclineCode:
+    """Test the _extract_decline_code helper in isolation."""
+
+    def _fn(self, text: str):
+        from app import _extract_decline_code
+        return _extract_decline_code(text)
+
+    def test_extracts_93_risk_block_single_quotes(self):
+        text = "declined with a decline code of '93_Risk_Block'."
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_extracts_93_risk_block_double_quotes(self):
+        text = 'declined with a decline code of "93_Risk_Block".'
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_extracts_93_risk_block_no_quotes(self):
+        text = "decline_code: 93_Risk_Block in the transaction."
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_extracts_51_insufficient_funds(self):
+        text = "The error code is '51_Insufficient_Funds'."
+        assert self._fn(text) == "51_Insufficient_Funds"
+
+    def test_extracts_from_full_incomplete_response(self):
+        text = (
+            "Based on the transaction logs, it appears that the payment for "
+            "TXN-00194400 was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I'll check our knowledge base."
+        )
+        assert self._fn(text) == "93_Risk_Block"
+
+    def test_returns_none_for_no_decline_code(self):
+        text = "The transaction was successful with no errors."
+        assert self._fn(text) is None
+
+    def test_returns_none_for_empty_string(self):
+        assert self._fn("") is None
+
+    def test_returns_none_for_none_input(self):
+        # noinspection PyTypeChecker
+        assert self._fn(None) is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _auto_repair_incomplete_response – auto-repair logic
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestAutoRepairIncompleteResponse:
+    """Test the _auto_repair_incomplete_response repair strategy."""
+
+    def _fn(self, incomplete_text, user_prompt, agent):
+        from app import _auto_repair_incomplete_response
+        return _auto_repair_incomplete_response(incomplete_text, user_prompt, agent)
+
+    def test_stage1_direct_kb_lookup_when_decline_code_present(self):
+        """When a decline code is found, the function should call
+        search_knowledge_base directly and synthesise a complete response."""
+        incomplete = (
+            "Based on the transaction logs, the payment for TXN-00194400 "
+            "was declined with a decline code of '93_Risk_Block'. "
+            "To understand what this error means, I'll check our knowledge base."
+        )
+        mock_agent = MagicMock()
+        kb_answer = (
+            "[Source 1: decline_codes.md]\n"
+            "Code 93 — Risk Block: The acquiring bank has blocked this "
+            "transaction due to suspected fraud or risk-management rules."
+        )
+
+        with patch(
+            "agents.agent_tools.search_knowledge_base"
+        ) as mock_kb:
+            mock_kb.invoke.return_value = kb_answer
+            result = self._fn(incomplete, "What happened to TXN-00194400?", mock_agent)
+
+        # Must contain KB findings
+        assert "93_Risk_Block" in result
+        assert "knowledge base" in result.lower()
+        # Must NOT contain the incomplete phrase
+        assert "I'll check our knowledge base" not in result
+        # Agent should NOT have been retried (deterministic repair succeeded)
+        mock_agent.invoke.assert_not_called()
+
+    def test_stage2_retry_when_no_decline_code(self):
+        """When no decline code can be extracted, the function should
+        retry the agent with reinforced instructions."""
+        incomplete = (
+            "There seems to be an issue. I'll check our knowledge base "
+            "for more information."
+        )
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {
+            "output": "The issue has been fully investigated. No errors found."
+        }
+
+        result = self._fn(incomplete, "What is wrong?", mock_agent)
+
+        # The retry must have been called
+        mock_agent.invoke.assert_called_once()
+        # The retry prompt must contain reinforcement language
+        call_args = mock_agent.invoke.call_args[0][0]
+        assert "CRITICAL INSTRUCTION" in call_args["input"]
+        # Result should be the retry's answer
+        assert "fully investigated" in result
+
+    def test_returns_original_when_both_stages_fail(self):
+        """If both KB lookup and retry fail, return the original text."""
+        incomplete = (
+            "Something went wrong. I'll check our knowledge base."
+        )
+        mock_agent = MagicMock()
+        # Retry also fails
+        mock_agent.invoke.return_value = {
+            "output": "I'll check our knowledge base again."
+        }
+
+        result = self._fn(incomplete, "Help me", mock_agent)
+
+        # Should return the original since everything failed
+        assert result == incomplete
+
+    def test_kb_exception_falls_back_to_retry(self):
+        """If KB lookup throws an exception, fall back to retry."""
+        incomplete = (
+            "The payment was declined with decline code '93_Risk_Block'. "
+            "I'll check our knowledge base."
+        )
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {
+            "output": "Code 93 means risk block. Here is the full explanation."
+        }
+
+        with patch(
+            "agents.agent_tools.search_knowledge_base"
+        ) as mock_kb:
+            mock_kb.invoke.side_effect = Exception("KB unavailable")
+            result = self._fn(incomplete, "What happened?", mock_agent)
+
+        # Should have fallen back to retry
+        mock_agent.invoke.assert_called_once()
+        assert "Code 93 means risk block" in result
