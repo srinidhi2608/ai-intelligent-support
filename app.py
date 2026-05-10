@@ -215,10 +215,37 @@ st.markdown(
     "Type your question below to get started."
 )
 
+# ──────────────────────────────────────────────────────────────────────────────
+# User input – captured here, BEFORE the sidebar is rendered.
+#
+# st.chat_input is a "sticky" widget: it always renders at the bottom of the
+# main content area regardless of where it is called in the script.  By reading
+# its value before the sidebar, we know whether the user has just submitted a
+# request and can disable the 3-second autorefresh for that script run.
+#
+# Why this matters:
+#   st_autorefresh works by injecting a JavaScript timer that sends a rerun
+#   signal to Streamlit every N ms.  If that signal fires while agent.invoke()
+#   is blocking (LLM calls can take 10-30 s), Streamlit interrupts and restarts
+#   the script.  On restart, user_prompt is None (the chat-input event was
+#   already consumed) so the agent reply is silently discarded and the chat UI
+#   only shows the user's message — exactly the "chatbot not waiting for
+#   backend response" symptom reported.
+# ──────────────────────────────────────────────────────────────────────────────
+
+user_prompt = st.chat_input(
+    "Ask a question (e.g., 'Why did transaction txn_123 fail?')"
+)
+
 with st.sidebar:
     st.subheader("📡 Real-Time Watcher")
-    st.caption("Polling `data/ml_active_alerts.csv` every 3 seconds.")
-    st_autorefresh(interval=3000, key="ml_alert_polling")
+    if user_prompt:
+        # An agent call is about to start.  Do NOT render st_autorefresh so
+        # the JavaScript timer cannot interrupt the LLM invocation.
+        st.caption("⏳ Agent is processing your request…")
+    else:
+        st.caption("Polling `data/ml_active_alerts.csv` every 3 seconds.")
+        st_autorefresh(interval=3000, key="ml_alert_polling")
     if st.session_state.get("show_realtime_alert_banner"):
         if st.button("Dismiss Subbi alert banner"):
             st.session_state.show_realtime_alert_banner = False
@@ -245,12 +272,8 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # ──────────────────────────────────────────────────────────────────────────────
-# User input & agent invocation
+# Agent invocation  (user_prompt was captured before the sidebar above)
 # ──────────────────────────────────────────────────────────────────────────────
-
-user_prompt = st.chat_input(
-    "Ask a question (e.g., 'Why did transaction txn_123 fail?')"
-)
 
 if user_prompt:
     # ── Display and record the user message ──────────────────────────────
