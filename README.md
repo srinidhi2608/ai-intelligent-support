@@ -425,7 +425,21 @@ docker compose -f docker-compose.kafka.yml down
 
 ---
 
-### Step 5 (Phase 2) — Run the real-time streaming pipeline ⚡
+### Step 5 (Phase 2) — Train the IsolationForest model (one-time setup) 🧠
+
+Before starting the consumer, run the training script once to generate and save
+the pre-trained model that the consumer loads at startup:
+
+```bash
+python train_isolation_forest.py
+```
+
+This creates `models/isolation_forest_model.joblib`. You only need to run this
+once; the file persists between restarts.
+
+---
+
+### Step 6 (Phase 2) — Run the real-time streaming pipeline ⚡
 
 Use two more terminals:
 
