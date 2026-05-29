@@ -296,8 +296,14 @@ class TestMetricsDataFrame:
         assert list(df.columns) == ["Model", "Metric", "Score"]
 
     def test_metrics_df_row_count(self):
-        """3 models × 3 metrics = 9 rows."""
-        model_names = ["IsolationForest", "OneClassSVM", "LocalOutlierFactor"]
+        """5 models × 3 metrics = 15 rows."""
+        model_names = [
+            "IsolationForest",
+            "OneClassSVM",
+            "LocalOutlierFactor",
+            "EllipticEnvelope",
+            "AutoEncoder",
+        ]
         metric_names = ["Precision", "Recall", "F1-Score"]
         rows = [
             {"Model": m, "Metric": met, "Score": 0.5}
@@ -305,10 +311,16 @@ class TestMetricsDataFrame:
             for met in metric_names
         ]
         df = pd.DataFrame(rows)
-        assert len(df) == 9
+        assert len(df) == 15
 
     def test_pivot_produces_correct_shape(self):
-        model_names = ["IsolationForest", "OneClassSVM", "LocalOutlierFactor"]
+        model_names = [
+            "IsolationForest",
+            "OneClassSVM",
+            "LocalOutlierFactor",
+            "EllipticEnvelope",
+            "AutoEncoder",
+        ]
         metric_names = ["Precision", "Recall", "F1-Score"]
         rows = [
             {"Model": m, "Metric": met, "Score": 0.5}
@@ -317,7 +329,7 @@ class TestMetricsDataFrame:
         ]
         df = pd.DataFrame(rows)
         pivot = df.pivot(index="Model", columns="Metric", values="Score")
-        assert pivot.shape == (3, 3)
+        assert pivot.shape == (5, 3)
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 pages/2_🧠_ML_Comparison.py – ML Model Comparison Dashboard
 =============================================================
 
-Streamlit multipage view that trains, evaluates, and visually compares three
+Streamlit multipage view that trains, evaluates, and visually compares
 unsupervised anomaly-detection models on the merged transaction + webhook data.
 
 Models
@@ -10,6 +10,8 @@ Models
 * Isolation Forest
 * One-Class SVM
 * Local Outlier Factor
+* Elliptic Envelope
+* AutoEncoder (VAE-style reconstruction)
 
 Ground truth is derived from known anomaly indicators in the data:
 ``decline_code == '93_Risk_Block'`` **or** ``http_status == 401``.
@@ -30,6 +32,8 @@ from sklearn.metrics import precision_score, recall_score, f1_score
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM
+from sklearn.covariance import EllipticEnvelope
+from sklearn.neural_network import MLPRegressor
 
 # ── Page configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -129,14 +133,20 @@ def load_and_prepare_data(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _FEATURE_COLS = ["amount", "http_status", "delivery_attempts"]
-_MODEL_NAMES = ["IsolationForest", "OneClassSVM", "LocalOutlierFactor"]
+_MODEL_NAMES = [
+    "IsolationForest",
+    "OneClassSVM",
+    "LocalOutlierFactor",
+    "EllipticEnvelope",
+    "AutoEncoder",
+]
 
 
 @st.cache_resource
 def train_and_evaluate(
     _data: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict[str, np.ndarray], dict[str, dict[str, int]]]:
-    """Train three anomaly-detection models and return evaluation artefacts.
+    """Train anomaly-detection models and return evaluation artefacts.
 
     Parameters
     ----------
@@ -158,13 +168,17 @@ def train_and_evaluate(
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(features)
 
+    contamination = 0.02
     models = {
         "IsolationForest": IsolationForest(
-            n_estimators=100, contamination=0.02, random_state=42
+            n_estimators=100, contamination=contamination, random_state=42
         ),
-        "OneClassSVM": OneClassSVM(kernel="rbf", gamma="auto", nu=0.02),
+        "OneClassSVM": OneClassSVM(kernel="rbf", gamma="auto", nu=contamination),
         "LocalOutlierFactor": LocalOutlierFactor(
-            n_neighbors=20, contamination=0.02, novelty=False
+            n_neighbors=20, contamination=contamination, novelty=False
+        ),
+        "EllipticEnvelope": EllipticEnvelope(
+            contamination=contamination, random_state=42
         ),
     }
 
@@ -196,6 +210,34 @@ def train_and_evaluate(
         rows.append({"Model": name, "Metric": "Recall", "Score": round(rec, 4)})
         rows.append({"Model": name, "Metric": "F1-Score", "Score": round(f1, 4)})
 
+    autoencoder = MLPRegressor(
+        hidden_layer_sizes=(8, 4, 8),
+        activation="relu",
+        solver="adam",
+        max_iter=500,
+        random_state=42,
+    )
+    autoencoder.fit(X_scaled, X_scaled)
+    reconstruction = autoencoder.predict(X_scaled)
+    reconstruction_error = np.mean(np.square(X_scaled - reconstruction), axis=1)
+    threshold = np.quantile(reconstruction_error, 1 - contamination)
+    ae_pred = (reconstruction_error >= threshold).astype(int)
+
+    predictions["AutoEncoder"] = ae_pred
+    ae_prec = precision_score(y_true, ae_pred, zero_division=0)
+    ae_rec = recall_score(y_true, ae_pred, zero_division=0)
+    ae_f1 = f1_score(y_true, ae_pred, zero_division=0)
+
+    ae_tp = int(((ae_pred == 1) & (y_true == 1)).sum())
+    ae_fp = int(((ae_pred == 1) & (y_true == 0)).sum())
+    ae_fn = int(((ae_pred == 0) & (y_true == 1)).sum())
+    ae_tn = int(((ae_pred == 0) & (y_true == 0)).sum())
+    confusion_counts["AutoEncoder"] = {"TP": ae_tp, "FP": ae_fp, "FN": ae_fn, "TN": ae_tn}
+
+    rows.append({"Model": "AutoEncoder", "Metric": "Precision", "Score": round(ae_prec, 4)})
+    rows.append({"Model": "AutoEncoder", "Metric": "Recall", "Score": round(ae_rec, 4)})
+    rows.append({"Model": "AutoEncoder", "Metric": "F1-Score", "Score": round(ae_f1, 4)})
+
     metrics_df = pd.DataFrame(rows)
     return metrics_df, predictions, confusion_counts
 
@@ -218,6 +260,8 @@ anomalies.
 | **Isolation Forest** | Recursively partitions data; anomalies are isolated quickly. |
 | **One-Class SVM** | Finds a tight boundary around normal data in kernel space. |
 | **Local Outlier Factor** | Compares local density of a point to its neighbours. |
+| **Elliptic Envelope** | Fits a robust Gaussian boundary and flags points outside it. |
+| **AutoEncoder (VAE-style)** | Reconstructs normal patterns; high reconstruction error indicates anomalies. |
 
 **Ground truth**: a transaction is considered a *true anomaly* when
 `decline_code == '93_Risk_Block'` **or** `http_status == 401`.
@@ -252,10 +296,7 @@ st.subheader("📋 Evaluation Metrics")
 pivot = metrics_df.pivot(index="Model", columns="Metric", values="Score")
 pivot = pivot[["Precision", "Recall", "F1-Score"]]
 
-st.dataframe(
-    pivot.style.highlight_max(axis=0, color="#2ecc71"),
-    use_container_width=True,
-)
+st.dataframe(pivot, use_container_width=True)
 
 # ── 4b. Grouped bar chart ────────────────────────────────────────────────────
 st.subheader("📊 Visual Comparison")
