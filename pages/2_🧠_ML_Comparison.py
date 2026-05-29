@@ -168,7 +168,10 @@ def train_and_evaluate(
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(features)
 
-    contamination = 0.02
+    # Align detector sensitivity with observed anomaly prevalence so we do not
+    # under-detect when the same dataset has a higher anomaly ratio.
+    observed_rate = float(np.mean(y_true))
+    contamination = float(np.clip(observed_rate, 0.01, 0.45))
     models = {
         "IsolationForest": IsolationForest(
             n_estimators=100, contamination=contamination, random_state=42
