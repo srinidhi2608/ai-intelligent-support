@@ -25,8 +25,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from agents.agent_orchestrator import SYSTEM_PROMPT, initialize_agent
 
@@ -73,6 +75,40 @@ _AGENT_TOOL_NAMES = frozenset({
     "check_ml_system_alerts",
 })
 
+_ALERTS_CSV_PATH = Path(__file__).parent / "data" / "ml_active_alerts.csv"
+_REALTIME_ALERT_MESSAGE = (
+    "⚠️ Subbi Alert: A real-time anomaly was just detected by the ML Watcher. "
+    "Ask me to investigate!"
+)
+
+
+def _get_alert_file_mtime() -> float | None:
+    """Return the alert CSV last-modified timestamp, or None if missing."""
+    try:
+        return _ALERTS_CSV_PATH.stat().st_mtime
+    except FileNotFoundError:
+        return None
+
+
+def _init_realtime_alert_state() -> None:
+    """Initialize session-state keys used by real-time alert notifications."""
+    if "last_alert_mtime" not in st.session_state:
+        st.session_state.last_alert_mtime = _get_alert_file_mtime()
+    if "show_realtime_alert_banner" not in st.session_state:
+        st.session_state.show_realtime_alert_banner = False
+
+
+def _detect_new_realtime_alert() -> bool:
+    """Return True only when ml_active_alerts.csv was modified since last run."""
+    current_mtime = _get_alert_file_mtime()
+    previous_mtime = st.session_state.get("last_alert_mtime")
+    st.session_state.last_alert_mtime = current_mtime
+
+    if current_mtime is None:
+        return False
+    if previous_mtime is None:
+        return True
+    return current_mtime > previous_mtime
 # Compiled regex that catches common "I'll check / let me look up" phrases
 # emitted by the LLM as a final answer instead of actually calling the tool.
 # The middle section uses a lazy `[^.!?]{0,80}?` to tolerate extra words like
@@ -359,6 +395,49 @@ st.markdown(
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
+# User input – captured here, BEFORE the sidebar is rendered.
+#
+# st.chat_input is a "sticky" widget: it always renders at the bottom of the
+# main content area regardless of where it is called in the script.  By reading
+# its value before the sidebar, we know whether the user has just submitted a
+# request and can disable the 3-second autorefresh for that script run.
+#
+# Why this matters:
+#   st_autorefresh works by injecting a JavaScript timer that sends a rerun
+#   signal to Streamlit every N ms.  If that signal fires while agent.invoke()
+#   is blocking (LLM calls can take 10-30 s), Streamlit interrupts and restarts
+#   the script.  On restart, user_prompt is None (the chat-input event was
+#   already consumed) so the agent reply is silently discarded and the chat UI
+#   only shows the user's message — exactly the "chatbot not waiting for
+#   backend response" symptom reported.
+# ──────────────────────────────────────────────────────────────────────────────
+
+user_prompt = st.chat_input(
+    "Ask a question (e.g., 'Why did transaction txn_123 fail?')"
+)
+
+with st.sidebar:
+    st.subheader("📡 Real-Time Watcher")
+    if user_prompt:
+        # An agent call is about to start.  Do NOT render st_autorefresh so
+        # the JavaScript timer cannot interrupt the LLM invocation.
+        st.caption("⏳ Agent is processing your request…")
+    else:
+        st.caption("Polling `data/ml_active_alerts.csv` every 3 seconds.")
+        st_autorefresh(interval=3000, key="ml_alert_polling")
+    if st.session_state.get("show_realtime_alert_banner"):
+        if st.button("Dismiss Subbi alert banner"):
+            st.session_state.show_realtime_alert_banner = False
+
+_init_realtime_alert_state()
+if _detect_new_realtime_alert():
+    st.session_state.show_realtime_alert_banner = True
+    st.toast(_REALTIME_ALERT_MESSAGE, icon="⚠️")
+
+if st.session_state.show_realtime_alert_banner:
+    st.warning(_REALTIME_ALERT_MESSAGE)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Session state – chat history
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -372,12 +451,8 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # ──────────────────────────────────────────────────────────────────────────────
-# User input & agent invocation
+# Agent invocation  (user_prompt was captured before the sidebar above)
 # ──────────────────────────────────────────────────────────────────────────────
-
-user_prompt = st.chat_input(
-    "Ask a question (e.g., 'Why did transaction txn_123 fail?')"
-)
 
 if user_prompt:
     # ── Display and record the user message ──────────────────────────────
@@ -429,6 +504,18 @@ if user_prompt:
                     "Please try rephrasing your question."
                 )
 
+            # ── CRITICAL: persist to session_state BEFORE any Streamlit UI
+            # call.  status.update() is the next st.* call and it is the
+            # point where a pending autorefresh rerun-interrupt (StopException)
+            # fires.  If session_state is written after status.update() the
+            # exception propagates past the append and the reply is silently
+            # discarded — exactly the "chatbot not showing backend response"
+            # bug.  Pure Python dict operations (like list.append) are NOT
+            # Streamlit yield-points and cannot be interrupted.
+            st.session_state.messages.append(
+                {"role": "assistant", "content": assistant_reply}
+            )
+
             status.update(
                 label="✅ Investigation complete",
                 state="complete",
@@ -437,6 +524,9 @@ if user_prompt:
 
         except ValueError as exc:
             assistant_reply = f"⚠️ Configuration error: {exc}"
+            st.session_state.messages.append(
+                {"role": "assistant", "content": assistant_reply}
+            )
             status.update(label="⚠️ Configuration error", state="error")
         except Exception as exc:
             assistant_reply = (
@@ -444,11 +534,19 @@ if user_prompt:
                 "Please ensure the FastAPI gateway is running "
                 "(`uvicorn main:app --reload`) and try again."
             )
+            st.session_state.messages.append(
+                {"role": "assistant", "content": assistant_reply}
+            )
             status.update(label="⚠️ An error occurred", state="error")
 
-    # ── Display and record the assistant response ────────────────────────
-    st.session_state.messages.append(
-        {"role": "assistant", "content": assistant_reply}
-    )
-    with st.chat_message("assistant", avatar="🤖"):
-        st.markdown(assistant_reply)
+    # ── Display the assistant response ───────────────────────────────────
+    # Read from session_state rather than the local variable.  If the
+    # rerun-interrupt fires at status.update() above, this block is
+    # skipped, but the message is already in session_state so the next
+    # Streamlit run renders it via the chat-history loop at the top.
+    if (
+        st.session_state.messages
+        and st.session_state.messages[-1]["role"] == "assistant"
+    ):
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(st.session_state.messages[-1]["content"])

@@ -37,6 +37,7 @@ htmlcov/
 
 # Generated telemetry CSV files (recreate with: python data/telemetry_generator.py)
 data/output/*.csv
+data/ml_active_alerts.csv
 
 # RAG pipeline generated artifacts (recreate with: python rag_setup.py)
 docs/
