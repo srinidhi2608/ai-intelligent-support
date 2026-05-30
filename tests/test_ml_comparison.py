@@ -296,8 +296,14 @@ class TestMetricsDataFrame:
         assert list(df.columns) == ["Model", "Metric", "Score"]
 
     def test_metrics_df_row_count(self):
-        """3 models × 3 metrics = 9 rows."""
-        model_names = ["IsolationForest", "OneClassSVM", "LocalOutlierFactor"]
+        """5 models × 3 metrics = 15 rows."""
+        model_names = [
+            "IsolationForest",
+            "OneClassSVM",
+            "LocalOutlierFactor",
+            "EllipticEnvelope",
+            "AutoEncoder",
+        ]
         metric_names = ["Precision", "Recall", "F1-Score"]
         rows = [
             {"Model": m, "Metric": met, "Score": 0.5}
@@ -305,10 +311,16 @@ class TestMetricsDataFrame:
             for met in metric_names
         ]
         df = pd.DataFrame(rows)
-        assert len(df) == 9
+        assert len(df) == 15
 
     def test_pivot_produces_correct_shape(self):
-        model_names = ["IsolationForest", "OneClassSVM", "LocalOutlierFactor"]
+        model_names = [
+            "IsolationForest",
+            "OneClassSVM",
+            "LocalOutlierFactor",
+            "EllipticEnvelope",
+            "AutoEncoder",
+        ]
         metric_names = ["Precision", "Recall", "F1-Score"]
         rows = [
             {"Model": m, "Metric": met, "Score": 0.5}
@@ -317,7 +329,7 @@ class TestMetricsDataFrame:
         ]
         df = pd.DataFrame(rows)
         pivot = df.pivot(index="Model", columns="Metric", values="Score")
-        assert pivot.shape == (3, 3)
+        assert pivot.shape == (5, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -443,11 +455,14 @@ class TestModelTraining:
     def test_isolation_forest_runs(self, small_dataset):
         from sklearn.ensemble import IsolationForest
         from sklearn.preprocessing import StandardScaler
-        X = StandardScaler().fit_transform(
-            small_dataset[["amount", "http_status", "delivery_attempts"]]
-        )
+        features = ["amount", "http_status", "delivery_attempts"]
+        X = StandardScaler().fit_transform(small_dataset[features])
+        # Semi-supervised: train on normal data only
+        normal_mask = small_dataset["is_anomaly_actual"].values == 0
+        X_normal = X[normal_mask]
         model = IsolationForest(n_estimators=50, contamination=0.2, random_state=42)
-        raw = model.fit_predict(X)
+        model.fit(X_normal)
+        raw = model.predict(X)
         y_pred = (raw == -1).astype(int)
         assert len(y_pred) == len(small_dataset)
         assert set(y_pred).issubset({0, 1})
@@ -455,11 +470,13 @@ class TestModelTraining:
     def test_one_class_svm_runs(self, small_dataset):
         from sklearn.svm import OneClassSVM
         from sklearn.preprocessing import StandardScaler
-        X = StandardScaler().fit_transform(
-            small_dataset[["amount", "http_status", "delivery_attempts"]]
-        )
-        model = OneClassSVM(kernel="rbf", gamma="auto", nu=0.2)
-        raw = model.fit(X).predict(X)
+        features = ["amount", "http_status", "delivery_attempts"]
+        X = StandardScaler().fit_transform(small_dataset[features])
+        normal_mask = small_dataset["is_anomaly_actual"].values == 0
+        X_normal = X[normal_mask]
+        model = OneClassSVM(kernel="rbf", gamma="scale", nu=0.2)
+        model.fit(X_normal)
+        raw = model.predict(X)
         y_pred = (raw == -1).astype(int)
         assert len(y_pred) == len(small_dataset)
         assert set(y_pred).issubset({0, 1})
@@ -467,11 +484,13 @@ class TestModelTraining:
     def test_lof_runs(self, small_dataset):
         from sklearn.neighbors import LocalOutlierFactor
         from sklearn.preprocessing import StandardScaler
-        X = StandardScaler().fit_transform(
-            small_dataset[["amount", "http_status", "delivery_attempts"]]
-        )
-        model = LocalOutlierFactor(n_neighbors=2, contamination=0.2, novelty=False)
-        raw = model.fit_predict(X)
+        features = ["amount", "http_status", "delivery_attempts"]
+        X = StandardScaler().fit_transform(small_dataset[features])
+        normal_mask = small_dataset["is_anomaly_actual"].values == 0
+        X_normal = X[normal_mask]
+        model = LocalOutlierFactor(n_neighbors=2, contamination=0.2, novelty=True)
+        model.fit(X_normal)
+        raw = model.predict(X)
         y_pred = (raw == -1).astype(int)
         assert len(y_pred) == len(small_dataset)
         assert set(y_pred).issubset({0, 1})
@@ -493,7 +512,7 @@ class TestMLComparisonPageRender:
         st.cache_resource.clear()
 
         at = AppTest.from_file("pages/2_🧠_ML_Comparison.py")
-        at.run(timeout=10)
+        at.run(timeout=30)
 
         assert not at.exception
 
@@ -511,6 +530,6 @@ class TestMLComparisonPageRender:
         monkeypatch.setenv("ANALYTICS_DATA_DIR", str(tmp_path))
 
         at = AppTest.from_file("pages/2_🧠_ML_Comparison.py")
-        at.run(timeout=10)
+        at.run(timeout=30)
 
         assert not at.exception

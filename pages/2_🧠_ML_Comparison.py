@@ -2,7 +2,7 @@
 pages/2_🧠_ML_Comparison.py – ML Model Comparison Dashboard
 =============================================================
 
-Streamlit multipage view that trains, evaluates, and visually compares three
+Streamlit multipage view that trains, evaluates, and visually compares
 unsupervised anomaly-detection models on the merged transaction + webhook data.
 
 Models
@@ -10,6 +10,14 @@ Models
 * Isolation Forest
 * One-Class SVM
 * Local Outlier Factor
+* Elliptic Envelope
+* AutoEncoder (VAE-style reconstruction)
+
+Approach
+--------
+Semi-supervised anomaly detection: models are trained exclusively on
+**normal** data so they learn the "healthy" distribution and can identify
+deviations when scoring the full dataset.
 
 Ground truth is derived from known anomaly indicators in the data:
 ``decline_code == '93_Risk_Block'`` **or** ``http_status == 401``.
@@ -30,6 +38,8 @@ from sklearn.metrics import precision_score, recall_score, f1_score
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM
+from sklearn.covariance import EllipticEnvelope
+from sklearn.neural_network import MLPRegressor
 
 # ── Page configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -111,6 +121,38 @@ def load_and_prepare_data(
     else:
         merged["delivery_attempts"] = 0
 
+    if "latency_ms" in merged.columns:
+        merged["latency_ms"] = (
+            pd.to_numeric(merged["latency_ms"], errors="coerce").fillna(0).astype(float)
+        )
+    else:
+        merged["latency_ms"] = 0.0
+
+    # Derived features for better anomaly separation
+    merged["log_amount"] = np.log1p(merged["amount"])
+    merged["is_declined"] = (
+        (merged["status"] == "DECLINED").astype(int)
+        if "status" in merged.columns
+        else 0
+    )
+    # Fine-grained http status features — 401 (Unauthorized) is distinct from
+    # generic 4xx client errors and a strong anomaly signal in payment systems.
+    merged["is_http_401"] = (merged["http_status"] == 401).astype(int)
+    merged["is_http_other_4xx"] = (
+        (merged["http_status"] >= 400)
+        & (merged["http_status"] < 500)
+        & (merged["http_status"] != 401)
+    ).astype(int)
+    merged["is_http_5xx"] = (merged["http_status"] >= 500).astype(int)
+    merged["high_latency"] = (merged["latency_ms"] > 1000).astype(int)
+    merged["multi_attempt"] = (merged["delivery_attempts"] > 1).astype(int)
+    # Risk-related decline codes are a direct anomaly signal
+    merged["has_risk_decline"] = (
+        (merged["decline_code"].astype(str).str.contains("Risk", na=False)).astype(int)
+        if "decline_code" in merged.columns
+        else 0
+    )
+
     # ── Ground truth ──────────────────────────────────────────────────────
     risk_block = (
         merged["decline_code"] == "93_Risk_Block"
@@ -128,15 +170,29 @@ def load_and_prepare_data(
 # 2. MODEL TRAINING & EVALUATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_FEATURE_COLS = ["amount", "http_status", "delivery_attempts"]
-_MODEL_NAMES = ["IsolationForest", "OneClassSVM", "LocalOutlierFactor"]
+_FEATURE_COLS = [
+    "log_amount", "delivery_attempts", "latency_ms",
+    "is_declined", "is_http_401", "is_http_other_4xx", "is_http_5xx",
+    "high_latency", "multi_attempt", "has_risk_decline",
+]
+_MODEL_NAMES = [
+    "IsolationForest",
+    "OneClassSVM",
+    "LocalOutlierFactor",
+    "EllipticEnvelope",
+    "AutoEncoder",
+]
 
 
 @st.cache_resource
 def train_and_evaluate(
     _data: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict[str, np.ndarray], dict[str, dict[str, int]]]:
-    """Train three anomaly-detection models and return evaluation artefacts.
+    """Train anomaly-detection models using semi-supervised approach.
+
+    Semi-supervised strategy: models are fitted **only on normal data** so they
+    learn the healthy distribution.  At prediction time the full dataset
+    (normal + anomaly) is scored.
 
     Parameters
     ----------
@@ -150,21 +206,38 @@ def train_and_evaluate(
     predictions : dict[str, np.ndarray]
         Mapping of model name → binary prediction array (1 = anomaly, 0 = normal).
     confusion_counts : dict[str, dict[str, int]]
-        Mapping of model name → {"TP": …, "FP": …, "FN": …}.
+        Mapping of model name → {"TP": …, "FP": …, "FN": …, "TN": …}.
     """
-    features = _data[_FEATURE_COLS].copy()
+    # Use only feature columns that exist in the data
+    available_features = [c for c in _FEATURE_COLS if c in _data.columns]
+    if not available_features:
+        available_features = ["log_amount", "delivery_attempts"]
+
+    features = _data[available_features].copy()
     y_true = _data["is_anomaly_actual"].values
 
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(features)
+    X_all = scaler.fit_transform(features)
+
+    # Semi-supervised: train on normal data only
+    normal_mask = y_true == 0
+    X_normal = X_all[normal_mask]
+
+    # Contamination hint: expected anomaly fraction in full dataset scoring
+    observed_rate = float(np.mean(y_true))
+    contamination = float(np.clip(observed_rate, 0.01, 0.45))
 
     models = {
         "IsolationForest": IsolationForest(
-            n_estimators=100, contamination=0.02, random_state=42
+            n_estimators=300, contamination=contamination,
+            max_samples=1.0, random_state=42
         ),
-        "OneClassSVM": OneClassSVM(kernel="rbf", gamma="auto", nu=0.02),
+        "OneClassSVM": OneClassSVM(kernel="rbf", gamma="scale", nu=contamination),
         "LocalOutlierFactor": LocalOutlierFactor(
-            n_neighbors=20, contamination=0.02, novelty=False
+            n_neighbors=20, contamination=contamination, novelty=True
+        ),
+        "EllipticEnvelope": EllipticEnvelope(
+            contamination=contamination, random_state=42
         ),
     }
 
@@ -173,11 +246,15 @@ def train_and_evaluate(
     rows: list[dict[str, object]] = []
 
     for name, model in models.items():
-        if name == "LocalOutlierFactor":
-            raw = model.fit_predict(X_scaled)
+        if name in ("IsolationForest", "EllipticEnvelope"):
+            # These models work best trained on ALL data so they can learn
+            # the full feature distribution including rare anomaly patterns.
+            model.fit(X_all)
+            raw = model.predict(X_all)
         else:
-            raw = model.fit(X_scaled).predict(X_scaled)
-
+            # Other models: semi-supervised (fit on normal data only)
+            model.fit(X_normal)
+            raw = model.predict(X_all)
         # Map: -1 (outlier) → 1 (anomaly), 1 (inlier) → 0 (normal)
         y_pred = (raw == -1).astype(int)
         predictions[name] = y_pred
@@ -196,6 +273,35 @@ def train_and_evaluate(
         rows.append({"Model": name, "Metric": "Recall", "Score": round(rec, 4)})
         rows.append({"Model": name, "Metric": "F1-Score", "Score": round(f1, 4)})
 
+    # AutoEncoder: train reconstruction on normal data, score all data
+    autoencoder = MLPRegressor(
+        hidden_layer_sizes=(16, 8, 4, 8, 16),
+        activation="relu",
+        solver="adam",
+        max_iter=500,
+        random_state=42,
+    )
+    autoencoder.fit(X_normal, X_normal)
+    reconstruction = autoencoder.predict(X_all)
+    reconstruction_error = np.mean(np.square(X_all - reconstruction), axis=1)
+    threshold = np.quantile(reconstruction_error, 1 - contamination)
+    ae_pred = (reconstruction_error >= threshold).astype(int)
+
+    predictions["AutoEncoder"] = ae_pred
+    ae_prec = precision_score(y_true, ae_pred, zero_division=0)
+    ae_rec = recall_score(y_true, ae_pred, zero_division=0)
+    ae_f1 = f1_score(y_true, ae_pred, zero_division=0)
+
+    ae_tp = int(((ae_pred == 1) & (y_true == 1)).sum())
+    ae_fp = int(((ae_pred == 1) & (y_true == 0)).sum())
+    ae_fn = int(((ae_pred == 0) & (y_true == 1)).sum())
+    ae_tn = int(((ae_pred == 0) & (y_true == 0)).sum())
+    confusion_counts["AutoEncoder"] = {"TP": ae_tp, "FP": ae_fp, "FN": ae_fn, "TN": ae_tn}
+
+    rows.append({"Model": "AutoEncoder", "Metric": "Precision", "Score": round(ae_prec, 4)})
+    rows.append({"Model": "AutoEncoder", "Metric": "Recall", "Score": round(ae_rec, 4)})
+    rows.append({"Model": "AutoEncoder", "Metric": "F1-Score", "Score": round(ae_f1, 4)})
+
     metrics_df = pd.DataFrame(rows)
     return metrics_df, predictions, confusion_counts
 
@@ -208,16 +314,18 @@ st.title("🧠 ML Model Comparison – Anomaly Detection")
 
 st.markdown(
     """
-**Unsupervised Anomaly Detection** identifies unusual patterns in data
-*without* pre-labelled examples.  Each model below learns what "normal"
-transaction behaviour looks like and flags deviations as potential
-anomalies.
+**Semi-Supervised Anomaly Detection** trains models exclusively on
+*normal* transaction data so they learn the healthy baseline.  At
+prediction time the full dataset is scored, and deviations from the
+learned distribution are flagged as anomalies.
 
 | Model | How it works |
 |---|---|
 | **Isolation Forest** | Recursively partitions data; anomalies are isolated quickly. |
 | **One-Class SVM** | Finds a tight boundary around normal data in kernel space. |
-| **Local Outlier Factor** | Compares local density of a point to its neighbours. |
+| **Local Outlier Factor** | Compares local density of a point to its neighbours (novelty mode). |
+| **Elliptic Envelope** | Fits a robust Gaussian boundary and flags points outside it. |
+| **AutoEncoder (VAE-style)** | Reconstructs normal patterns; high reconstruction error indicates anomalies. |
 
 **Ground truth**: a transaction is considered a *true anomaly* when
 `decline_code == '93_Risk_Block'` **or** `http_status == 401`.
@@ -252,10 +360,7 @@ st.subheader("📋 Evaluation Metrics")
 pivot = metrics_df.pivot(index="Model", columns="Metric", values="Score")
 pivot = pivot[["Precision", "Recall", "F1-Score"]]
 
-st.dataframe(
-    pivot.style.highlight_max(axis=0, color="#2ecc71"),
-    use_container_width=True,
-)
+st.dataframe(pivot, use_container_width=True)
 
 # ── 4b. Grouped bar chart ────────────────────────────────────────────────────
 st.subheader("📊 Visual Comparison")

@@ -207,7 +207,7 @@ ai-intelligent-support/
 │
 ├── pages/
 │   ├── 1_📊_Analytics.py          # Streamlit analytics dashboard
-│   └── 2_🧠_ML_Comparison.py      # ML model comparison dashboard (IF vs. SVM vs. LOF)
+│   └── 2_🧠_ML_Comparison.py      # ML model comparison dashboard (IF/SVM/LOF/EllipticEnvelope/AutoEncoder)
 │
 ├── tests/                         # Pytest suite (446+ tests, fully offline / mocked)
 │
@@ -529,7 +529,7 @@ streamlit run app.py
 # → Navigate to "🧠 ML Comparison" in the sidebar
 ```
 
-This dashboard trains, evaluates, and visually compares three unsupervised
+This dashboard trains, evaluates, and visually compares five unsupervised
 anomaly-detection models on the merged transaction + webhook data:
 
 | Model | Description |
@@ -537,6 +537,8 @@ anomaly-detection models on the merged transaction + webhook data:
 | **Isolation Forest** | Tree-based anomaly isolation (best F1-Score for FinTech anomalies) |
 | **One-Class SVM** | Kernel-based novelty detection |
 | **Local Outlier Factor** | Density-based local outlier scoring |
+| **Elliptic Envelope** | Robust covariance ellipse-based anomaly detection |
+| **AutoEncoder (VAE-style)** | Reconstruction-error-based anomaly detection |
 
 Ground truth is derived from known anomaly indicators:
 `decline_code == '93_Risk_Block'` **or** `http_status == 401`.
